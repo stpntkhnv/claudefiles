@@ -1,0 +1,7 @@
+{
+  "agents": {
+    "project-manager": {
+      "model": "opus"
+    }
+  }
+}
