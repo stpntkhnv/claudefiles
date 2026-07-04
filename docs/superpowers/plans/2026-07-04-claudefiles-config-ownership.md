@@ -16,7 +16,7 @@
 ## Global Constraints
 
 - No third-party language deps: bash + python3 **stdlib only** (`json`), GNU coreutils/awk, git.
-- **No secret ever in a tracked file.** Secrets live only in `~/.config/claudefiles/secrets.json` (`chmod 600`, gitignored). A test enforces this; the repo is **public**.
+- **No secret ever in a tracked file.** Secrets live only under `~/.config/claudefiles/` — `secrets.json` (the source) and `managed-mcp.json` (the MCP manifest, which embeds base64 ADO PATs for change-detection); both are written `chmod 600` and are outside the repo. A test enforces nothing secret-bearing is tracked; the repo is **public**.
 - **No hardcoded `/home/<user>`.** Use `$HOME`; derive the hook path from the running repo's location.
 - Every module is **idempotent**: safe to re-run; `setup.sh` run twice produces no diff and exits 0.
 - **TTY rule:** prompt for missing secrets only when a TTY is present; without a TTY, fail fast listing missing keys — never hang.
@@ -676,6 +676,7 @@ grep -q "mcp add-json --scope user context7" "$(fake_claude_calls)" || { echo FA
 grep -q "azureDevOps-old" "$(fake_claude_calls)" || { echo FAIL add-old; exit 1; }
 manifest="$h/.config/claudefiles/managed-mcp.json"
 grep -q "azureDevOps-old" "$manifest" || { echo FAIL manifest; exit 1; }
+[ "$(stat -c '%a' "$manifest")" = "600" ] || { echo "FAIL manifest perms $(stat -c '%a' "$manifest")"; exit 1; }   # secret-bearing -> owner-only
 
 # round 2: drop org "old" -> removed via manifest; an unmanaged user server is never swept
 : > "$(fake_claude_calls)"
@@ -772,9 +773,10 @@ mcp_apply() {
         "$cb" mcp remove --scope user "$name" >/dev/null 2>&1 || true
         "$cb" mcp add-json --scope user "$name" "$one"
       done
-  # rewrite manifest with the full desired dict
+  # rewrite manifest with the full desired dict (chmod 600: it holds base64 PATs, like secrets.json)
   mkdir -p "$(dirname "$manifest")"
   printf '%s' "$servers" > "$manifest"
+  chmod 600 "$manifest"
   log "MCP servers reconciled"
 }
 ```
