@@ -19,6 +19,8 @@ git clone git@github.com:stpntkhnv/claudefiles.git && cd claudefiles && ./setup.
 
 Требуется: git, bash, GNU coreutils/awk, python3. `setup.sh` идемпотентен: клонирует/обновляет dotnet-skills, генерирует каталог с путями этой машины, ставит симлинк, вписывает хук в `settings.json` (с бэкапом), гоняет тесты.
 
+Отдельно, изнутри Claude Code (setup.sh напомнит, если не найдёт): `/plugin install superpowers@claude-plugins-official` — процессный каркас, в чьи этапы встраивается роутер. Роутер работает и без него, но доставка знания через планы и субагентов опирается на его процесс.
+
 ## Обновление dotnet-skills
 
 ```bash
