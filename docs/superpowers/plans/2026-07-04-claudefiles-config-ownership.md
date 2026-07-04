@@ -893,7 +893,7 @@ config_ensure_all
 
 log "3/7 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)"
 log "4/7 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)"
-log "5/7 plugins";       [ "$(config_flag dotnet_skills)" = true ] && plugins_apply || log "skip plugins"
+log "5/7 plugins";       if [ "$(config_flag dotnet_skills)" = true ]; then plugins_apply || warn "plugin install failed (rest of config still applied)"; else log "skip plugins"; fi
 log "6/7 mcp";           mcp_apply
 log "7/7 verify"
 python3 -m json.tool "$HOME/.claude/settings.json" >/dev/null && log "settings.json valid"
