@@ -54,6 +54,12 @@ test -f "$dst/SKILL.md" && test -f "$dst/INDEX.md" && echo "skill+catalog reacha
 python3 -m json.tool "$S" > /dev/null && echo "settings.json valid"
 
 echo
+if [ -z "$(find "$CLAUDE_DIR/plugins" -maxdepth 4 -iname '*superpowers*' -print -quit 2>/dev/null)" ]; then
+  echo "WARN: superpowers plugin not found — the router works without it, but the"
+  echo "      stage integration (plans as transport, Skills blocks, subagent dispatch)"
+  echo "      relies on it. Install inside Claude Code, then restart:"
+  echo "        /plugin install superpowers@claude-plugins-official"
+fi
 echo "Done. Restart Claude Code sessions to pick up the skill and hook."
 echo "Optional (Roslyn LSP, needs .NET 10 SDK):"
 echo "  claude plugin marketplace add dotnet/skills && claude plugin install dotnet@dotnet-agent-skills"
