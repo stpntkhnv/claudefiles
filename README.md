@@ -14,7 +14,7 @@
 ## Установка на новой машине
 
 ```bash
-git clone git@github.com:stpntkhnv/claudefiles.git && cd claudefiles && ./setup.sh
+git clone https://github.com/stpntkhnv/claudefiles.git ~/dev/claudefiles && cd ~/dev/claudefiles && ./setup.sh
 ```
 
 Требуется: git, bash, GNU coreutils/awk, python3. `setup.sh` идемпотентен: клонирует/обновляет dotnet-skills, генерирует каталог с путями этой машины, ставит симлинк, вписывает хук в `settings.json` (с бэкапом), гоняет тесты.
