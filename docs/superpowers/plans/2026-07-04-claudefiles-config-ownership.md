@@ -228,7 +228,7 @@ config_set_array ado.orgs "a, b ,c,"
 [ "$(config_get ado.orgs)" = '["a", "b", "c"]' ] || { echo "FAIL array"; exit 1; }
 
 # required string still fails fast without TTY (does not hang)
-if CLAUDEFILES_ASSUME_TTY=0 config_ensure ado.pat.a "pat?" 2>/dev/null; then
+if (CLAUDEFILES_ASSUME_TTY=0 config_ensure ado.pat.a "pat?") 2>/dev/null; then   # subshell: die's exit must not kill this script
   echo "FAIL should have errored without TTY"; exit 1; fi
 echo "PASS test-config"
 ```
@@ -333,7 +333,7 @@ config_ensure() { # config_ensure <key> <prompt> [--secret] — REQUIRED string,
   [ -n "$cur" ] && return 0
   if _has_tty; then
     local val
-    if [ "$secret" = "--secret" ]; then read -rs -p "$prompt " val; echo; else read -r -p "$prompt " val; fi
+    if [ "$secret" = "--secret" ]; then read -rs -p "$prompt " val || true; echo; else read -r -p "$prompt " val || true; fi   # read exits 1 on EOF-without-newline but still assigns; keep set -e happy
     config_set "$key" "$val"
   else
     die "missing required config '$key' and no TTY to prompt (set it in $(config_path))"
@@ -345,7 +345,7 @@ config_ensure_optional() { # <key> <prompt> [--secret] — ask ONCE; empty is va
   config_has "$key" && return 0                 # already asked (even if stored empty) -> never re-ask
   if _has_tty; then
     local val
-    if [ "$secret" = "--secret" ]; then read -rs -p "$prompt " val; echo; else read -r -p "$prompt " val; fi
+    if [ "$secret" = "--secret" ]; then read -rs -p "$prompt " val || true; echo; else read -r -p "$prompt " val || true; fi   # read exits 1 on EOF-without-newline but still assigns; keep set -e happy
     config_set "$key" "$val"                     # persists "" too -> config_has true next run
   else
     config_set "$key" ""                         # no TTY: record empty, do not fail (optional)
@@ -356,7 +356,7 @@ config_ensure_flag() { # <name> <prompt> — ask ONCE for a boolean, persist as 
   local name="$1" prompt="$2"
   config_has "flags.$name" && return 0
   if _has_tty; then
-    local val; read -r -p "$prompt " val
+    local val; read -r -p "$prompt " val || true   # EOF-without-newline still assigns
     case "${val,,}" in y|yes|true|1) val=true ;; *) val=false ;; esac
     config_set_bool "flags.$name" "$val"
   else
