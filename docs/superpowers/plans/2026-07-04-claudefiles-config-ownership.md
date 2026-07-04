@@ -70,7 +70,7 @@ $CH/dot_claude/skills/brainstorming  # DELETE (superpowers plugin already provid
 - Modify: `$CF/.gitignore`
 
 **Interfaces:**
-- Produces: `faketools.bash` exports `setup_fixture_home()` (sets `$HOME` to a temp dir, returns it), `fake_claude_calls()` (path to the log file the fake `claude` appends every invocation to), and puts a **stateful** fake `claude` on `$PATH` (it remembers installed plugins / added marketplaces / added MCP servers and reflects them in `list` output, so re-runs are true no-ops). `common.sh` exports `log()`, `require_cmd <name>`, `claude_bin()` (echoes resolved claude path).
+- Produces: `faketools.bash` exports `setup_fixture_home()` (sets/exports `$HOME` to a temp dir; **must be called directly — `setup_fixture_home >/dev/null; h="$HOME"` — not via `$(...)`**, which would run it in a subshell and lose the exports), `fake_claude_calls()` (path to the log file the fake `claude` appends every invocation to), and puts a **stateful** fake `claude` on `$PATH` (it remembers installed plugins / added marketplaces / added MCP servers, dedups on write, and reflects them in `list` output, so re-runs are true no-ops). `common.sh` exports `log()`, `warn()`, `die()`, `require_cmd <name>`, `claude_bin()` (echoes resolved claude path).
 
 - [ ] **Step 1: Move the checkout and confirm git survives**
 
@@ -98,6 +98,12 @@ Create `$CF/skills/tools/lib/faketools.bash`:
 # It logs every invocation (so tests can assert the commands setup.sh issues) AND
 # remembers installed plugins / added marketplaces / added MCP servers, reflecting
 # them back in `list` output — so a second setup run is a genuine no-op (finding 7).
+#
+# USAGE: call it DIRECTLY so its exports reach your shell, then read $HOME:
+#     setup_fixture_home >/dev/null; h="$HOME"
+# Do NOT write  h="$(setup_fixture_home)"  — command substitution runs it in a
+# subshell, so the HOME/PATH/CLAUDE_FAKE_* exports never reach the caller and the
+# functions under test would touch your REAL ~/.claude.
 setup_fixture_home() {
   local h; h="$(mktemp -d)"
   mkdir -p "$h/.claude" "$h/.config"
@@ -113,11 +119,11 @@ S="$CLAUDE_FAKE_STATE"
 case "$1 $2" in
   "plugin list")        cat "$S/plugins" 2>/dev/null ;;
   "plugin marketplace")                                   # add <name> | list
-    if [ "$3" = "add" ];  then printf '%s\n' "$4" >> "$S/marketplaces"
+    if [ "$3" = "add" ];  then grep -qxF "$4" "$S/marketplaces" 2>/dev/null || printf '%s\n' "$4" >> "$S/marketplaces"
     elif [ "$3" = "list" ]; then cat "$S/marketplaces" 2>/dev/null; fi ;;
-  "plugin install")     printf '%s\n' "$3" >> "$S/plugins" ;;
+  "plugin install")     grep -qxF "$3" "$S/plugins" 2>/dev/null || printf '%s\n' "$3" >> "$S/plugins" ;;
   "mcp list")           cat "$S/mcp" 2>/dev/null ;;
-  "mcp add-json")       printf '%s\n' "$5" >> "$S/mcp" ;;   # mcp add-json --scope user NAME JSON
+  "mcp add-json")       grep -qxF "$5" "$S/mcp" 2>/dev/null || printf '%s\n' "$5" >> "$S/mcp" ;;   # add-json --scope user NAME JSON; dedup so re-add is a no-op
   "mcp remove")                                            # mcp remove --scope user NAME
     grep -vxF "$5" "$S/mcp" > "$S/mcp.tmp" 2>/dev/null || true; mv "$S/mcp.tmp" "$S/mcp" 2>/dev/null || true ;;
   *) : ;;
@@ -126,6 +132,7 @@ exit 0
 EOF
   chmod +x "$bin/claude"
   export PATH="$bin:$PATH"
+  hash -r 2>/dev/null || true   # drop any cached real-claude path so the fake wins
   echo "$h"
 }
 fake_claude_calls() { echo "$CLAUDE_FAKE_LOG"; }
@@ -389,7 +396,7 @@ git commit -m "feat: secrets.json store with TTY-aware prompting"
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
-source "$cf/skills/tools/lib/faketools.bash"; h="$(setup_fixture_home)"
+source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
 source "$cf/lib/common.sh"; source "$cf/lib/settings.sh"
 
 # pre-existing settings with a STALE hook and an UNKNOWN key that must survive
@@ -524,7 +531,7 @@ cp ~/.claude/skills/context7-mcp/SKILL.md ~/dev/claudefiles/claude/skills/contex
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
-source "$cf/skills/tools/lib/faketools.bash"; h="$(setup_fixture_home)"
+source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
 source "$cf/lib/common.sh"; source "$cf/lib/skills.sh"
 # Keep the unit test hermetic: the clone-if-missing path needs the network, so it is
 # exercised by the Task 13 container smoke, not here. On the dev machine the clone
@@ -536,7 +543,7 @@ skills_apply "$cf" true
 [ "$(readlink "$h/.claude/skills/dotnet-router")" = "$cf/claude/skills/dotnet-router" ] || { echo FAIL target; exit 1; }
 [ -f "$h/.claude/skills/dotnet-router/INDEX.md" ] || { echo FAIL index; exit 1; }
 # dotnet disabled -> context7 only, no dotnet-router symlink
-h2="$(setup_fixture_home)"; skills_apply "$cf" false
+setup_fixture_home >/dev/null; h2="$HOME"; skills_apply "$cf" false
 [ -f "$h2/.claude/skills/context7-mcp/SKILL.md" ] || { echo FAIL c7-off; exit 1; }
 [ -L "$h2/.claude/skills/dotnet-router" ] && { echo FAIL router-should-be-absent; exit 1; }
 echo "PASS test-skills"
@@ -653,7 +660,7 @@ git commit -m "feat: idempotent dotnet plugin install (ported from chezmoi)"
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
-source "$cf/skills/tools/lib/faketools.bash"; h="$(setup_fixture_home)"
+source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
 source "$cf/lib/common.sh"; source "$cf/lib/config.sh"; source "$cf/lib/mcp.sh"
 
 # round 1: context7 (free tier) + ado org "old"
@@ -819,7 +826,7 @@ git commit -m "feat: hook path resolver for settings wiring"
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
-source "$cf/skills/tools/lib/faketools.bash"; h="$(setup_fixture_home)"
+source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
 # seed non-interactive config so no prompt is needed
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
@@ -961,7 +968,7 @@ git commit -m "feat: pull claudefiles as a git-repo external"
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
-source "$cf/skills/tools/lib/faketools.bash"; h="$(setup_fixture_home)"
+source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
 export CLAUDEFILES_STATE_DIR="$h/.config/claudefiles"; mkdir -p "$CLAUDEFILES_STATE_DIR"
 ran="$h/ran"; run_cb() { echo x >> "$ran"; }
 source "$cf/lib/apply-if-changed.sh"
