@@ -1,7 +1,9 @@
 # Design: claudefiles as the single source of truth for Claude config
 
 **Date:** 2026-07-04
-**Status:** Draft rev. 2 — Codex review incorporated (findings 2–7); 2 decisions open (§9.4 repo visibility, §9.5 interactivity). Finding 1's premise disputed (git-repo externals do support SSH) and reframed as §9.4.
+**Status:** Rev. 3 — all §9 decisions resolved (public+https, two-copy layout, TTY prompting).
+Codex findings 2–7 incorporated; finding 1's premise disputed (git-repo externals support SSH)
+and resolved as public+https. Ready for implementation planning.
 **Topic:** Consolidate all `~/.claude` configuration into the standalone `claudefiles`
 repo; shrink chezmoi to a thin bootstrap (install `claude` + pull & trigger claudefiles);
 move secret collection into claudefiles.
@@ -150,15 +152,11 @@ moves into `setup.sh` so container-only differences stay in one place.
 to Claude config (git name/email, `setup_codex`, container options).
 
 **Add:**
-- `.chezmoiexternal.toml` entry, `type = "git-repo"`, `refreshPeriod = "168h"`,
-  `pull.args = ["--ff-only"]`. **URL scheme depends on repo visibility (open decision §9.4):**
-  git-repo externals shell out to `git clone`/`git pull`, so SSH URLs *are* supported
-  (chezmoi documents `url = "git@host:org/repo.git"` for private repos). But a fresh-machine
-  SSH clone needs the key present first, so a private+SSH external must be guarded with
-  `{{ if stat (joinPath .chezmoi.homeDir ".ssh/id_ed25519") }}` and the key provisioned in a
-  `before_` step. A public repo over `https://github.com/stpntkhnv/claudefiles.git` clones
-  keyless — simplest for the one-command fresh-machine path. The design commits no secrets
-  (§4.3), so public is viable.
+- `.chezmoiexternal.toml` entry, `type = "git-repo"`,
+  `url = "https://github.com/stpntkhnv/claudefiles.git"` (**public repo — decided §9.4**;
+  keyless clone, simplest fresh-machine path; the design commits no secrets, §4.3),
+  `refreshPeriod = "168h"`, `pull.args = ["--ff-only"]`, cloned to the deploy copy
+  `~/.local/share/claudefiles` (**two-copy layout — decided §9.1**).
 - A **plain `run_after_setup-claudefiles.sh.tmpl`** (not `run_onchange_`): at execution time —
   externals are already updated by then (chezmoi Application Order: "`run_after_` scripts can
   safely depend on externals") — it reads the deploy copy's current `git rev-parse HEAD`,
@@ -222,17 +220,18 @@ Extend the existing `skills/tools/` tests:
 - (Manual/container) full `chezmoi apply` one-command smoke, appended to the existing
   smoke-results doc.
 
-## 9. Open decisions (confirm during review)
+## 9. Decisions (resolved 2026-07-04)
 
-1. **Repo location:** deploy `~/.local/share/claudefiles`, dev `~/dev/claudefiles` — OK, or
-   prefer `~/projects/…` / a single shared path?
-2. **`setup_azure` split:** keep the Azure-CLI install in chezmoi while the azure MCP-server
-   flag moves to claudefiles — acceptable, or move the whole azure concern?
-3. **settings.json ownership of `enabledPlugins`:** claudefiles owns the file and lists enabled
-   plugins; chezmoi no longer touches it. Confirm.
-4. **Repo visibility & clone auth (review finding 1):** public repo + `https` (keyless
-   fresh-machine clone, simplest) vs private + SSH (guard the external on an ssh-key `stat`,
-   provision the key in a `before_` step). No secrets are committed either way. **Needs your call.**
-5. **Interactivity default (review finding 3):** `setup.sh` prompts when a TTY is present and
-   secrets are missing, else fails fast non-interactively. Confirm this is the behavior you want
-   (interactive `chezmoi apply` prompts; unattended apply errors rather than hangs).
+1. **Repo layout — two copies.** chezmoi pulls the deploy copy to `~/.local/share/claudefiles`;
+   development happens in a separate `~/dev/claudefiles` checkout. Folder named `claudefiles`
+   (the `devTools` name is retired).
+2. **`setup_azure` split.** Azure CLI install stays in chezmoi (system tool); the azure
+   MCP-server flag moves to claudefiles.
+3. **settings.json ownership.** claudefiles owns the file incl. `enabledPlugins`; chezmoi no
+   longer touches it (`settings.local.json` stays machine-local).
+4. **Repo visibility — public + https.** Clone over
+   `https://github.com/stpntkhnv/claudefiles.git`, keyless. Hard requirement this imposes: a
+   test MUST guarantee no secret ever lands in a tracked file (§4.3 safety) — the repo is
+   world-readable.
+5. **Interactivity — TTY-based.** Prompt when a TTY is present and values are missing; fail
+   fast (never hang) when unattended.
