@@ -22,7 +22,8 @@
 - **TTY rule:** prompt for missing secrets only when a TTY is present; without a TTY, fail fast listing missing keys — never hang.
 - Deploy copy: `~/.local/share/claudefiles`. Dev checkout: `~/dev/claudefiles`. Repo: `https://github.com/stpntkhnv/claudefiles.git` (public).
 - Managed `settings.json` keys (replaced wholesale): `hooks`, `enabledPlugins`, `extraKnownMarketplaces`, `model`, `effortLevel`, `tui`, `theme`. Unknown top-level keys preserved. `settings.local.json` never touched.
-- TDD: failing test first, minimal code, commit per task. Commit messages end with a `Co-Authored-By` trailer.
+- TDD: failing test first, minimal code, commit per task. **Every commit** ends with the trailer `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`; the `git commit -m "…"` examples below abbreviate it — append it as a second `-m` line on each real commit.
+- **Flag typing:** feature flags (`flags.*`) are stored as real JSON booleans, never strings. `config_io.py` emits them lowercase (`true`/`false`) so bash and python agree; `build_servers.py` still coerces defensively.
 
 ---
 
@@ -69,7 +70,7 @@ $CH/dot_claude/skills/brainstorming  # DELETE (superpowers plugin already provid
 - Modify: `$CF/.gitignore`
 
 **Interfaces:**
-- Produces: `faketools.bash` exports `setup_fixture_home()` (sets `$HOME` to a temp dir, returns it), `fake_claude_calls()` (path to the log file the fake `claude` appends every invocation to), and puts a fake `claude` on `$PATH`. `common.sh` exports `log()`, `require_cmd <name>`, `claude_bin()` (echoes resolved claude path).
+- Produces: `faketools.bash` exports `setup_fixture_home()` (sets `$HOME` to a temp dir, returns it), `fake_claude_calls()` (path to the log file the fake `claude` appends every invocation to), and puts a **stateful** fake `claude` on `$PATH` (it remembers installed plugins / added marketplaces / added MCP servers and reflects them in `list` output, so re-runs are true no-ops). `common.sh` exports `log()`, `require_cmd <name>`, `claude_bin()` (echoes resolved claude path).
 
 - [ ] **Step 1: Move the checkout and confirm git survives**
 
@@ -93,21 +94,32 @@ grep -rn 'ado-mcp\|devTools' README.md claude/skills/dotnet-router/SKILL.md   # 
 Create `$CF/skills/tools/lib/faketools.bash`:
 
 ```bash
-# faketools.bash — test scaffolding: fixture HOME + a fake `claude` CLI that
-# logs every invocation so tests can assert on the commands setup.sh issues.
+# faketools.bash — test scaffolding: fixture HOME + a STATEFUL fake `claude` CLI.
+# It logs every invocation (so tests can assert the commands setup.sh issues) AND
+# remembers installed plugins / added marketplaces / added MCP servers, reflecting
+# them back in `list` output — so a second setup run is a genuine no-op (finding 7).
 setup_fixture_home() {
   local h; h="$(mktemp -d)"
   mkdir -p "$h/.claude" "$h/.config"
   export HOME="$h"
   export CLAUDE_FAKE_LOG="$h/.claude-calls.log"; : > "$CLAUDE_FAKE_LOG"
+  export CLAUDE_FAKE_STATE="$h/.claude-state"; mkdir -p "$CLAUDE_FAKE_STATE"
+  : > "$CLAUDE_FAKE_STATE/plugins"; : > "$CLAUDE_FAKE_STATE/marketplaces"; : > "$CLAUDE_FAKE_STATE/mcp"
   local bin="$h/bin"; mkdir -p "$bin"
   cat > "$bin/claude" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$CLAUDE_FAKE_LOG"
+S="$CLAUDE_FAKE_STATE"
 case "$1 $2" in
-  "plugin list")            echo "" ;;
-  "plugin marketplace")     echo "" ;;
-  "mcp list")               echo "" ;;
+  "plugin list")        cat "$S/plugins" 2>/dev/null ;;
+  "plugin marketplace")                                   # add <name> | list
+    if [ "$3" = "add" ];  then printf '%s\n' "$4" >> "$S/marketplaces"
+    elif [ "$3" = "list" ]; then cat "$S/marketplaces" 2>/dev/null; fi ;;
+  "plugin install")     printf '%s\n' "$3" >> "$S/plugins" ;;
+  "mcp list")           cat "$S/mcp" 2>/dev/null ;;
+  "mcp add-json")       printf '%s\n' "$5" >> "$S/mcp" ;;   # mcp add-json --scope user NAME JSON
+  "mcp remove")                                            # mcp remove --scope user NAME
+    grep -vxF "$5" "$S/mcp" > "$S/mcp.tmp" 2>/dev/null || true; mv "$S/mcp.tmp" "$S/mcp" 2>/dev/null || true ;;
   *) : ;;
 esac
 exit 0
@@ -159,7 +171,16 @@ git commit -m "chore: rename checkout to ~/dev/claudefiles, fix stale refs, add 
 
 **Interfaces:**
 - Consumes: `common.sh`.
-- Produces: `config_path()` → `$HOME/.config/claudefiles/secrets.json`; `config_get <dotted.key>` → value or empty; `config_ensure <dotted.key> <prompt-text> [--secret]` → prompts (TTY) or fails (no TTY), persists; `config_flag <name>` → `true`/`false`. Schema: `{flags:{context7,playwright,azure_mcp,ado,dotnet_skills}, context7_api_key, ado:{email,orgs:[],pat:{}}}`.
+- Produces:
+  - `config_path()` → `$HOME/.config/claudefiles/secrets.json`
+  - `config_get <key>` → value or empty (booleans emitted lowercase `true`/`false`, arrays as JSON)
+  - `config_has <key>` → exit 0 if the key **exists** (even if empty), 1 if absent — the presence test that distinguishes "free-tier empty key" from "never asked"
+  - `config_set <key> <str>` / `config_set_bool <key> <true|false>` / `config_set_array <key> <csv>` — typed writers (bool stored as JSON boolean; validated)
+  - `config_flag <name>` → `true`/`false` (default `false` when unset)
+  - `config_ensure <key> <prompt> [--secret]` → **required** string; prompts (TTY) or `die`s (no TTY); empty is rejected
+  - `config_ensure_optional <key> <prompt> [--secret]` → prompts **once** (`config_has` gate); empty is valid and remembered; no-TTY records empty without failing
+  - `config_ensure_flag <name> <prompt>` → prompts once for a boolean, persists as JSON bool
+  - Schema: `{flags:{context7,playwright,azure_mcp,ado,dotnet_skills}, context7_api_key, ado:{email,orgs:[],pat:{}}, playwright:{chromium_path?}}`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -172,13 +193,35 @@ here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null
 source "$cf/lib/common.sh"; source "$cf/lib/config.sh"
 
-# persist + read back
+# secret string persist + read back
 printf 'sekret' | CLAUDEFILES_ASSUME_TTY=1 config_ensure context7_api_key "key?" --secret
 [ "$(config_get context7_api_key)" = "sekret" ] || { echo "FAIL read-back"; exit 1; }
 # file is chmod 600
 perm="$(stat -c '%a' "$(config_path)")"; [ "$perm" = "600" ] || { echo "FAIL perms $perm"; exit 1; }
-# no-TTY missing value fails fast, does not hang
-if CLAUDEFILES_ASSUME_TTY=0 config_ensure ado.email "email?" 2>/dev/null; then
+
+# booleans round-trip as JSON bools -> config_flag reads them (finding 1)
+config_set_bool flags.context7 true
+[ "$(config_flag context7)" = true ] || { echo "FAIL flag true"; exit 1; }
+config_set_bool flags.playwright false
+[ "$(config_flag playwright)" = false ] || { echo "FAIL flag false"; exit 1; }
+# a false flag must read as the literal "false" (never Python's "False") so build_servers sees it falsy
+[ "$(config_get flags.playwright)" = "false" ] || { echo "FAIL bool literal"; exit 1; }
+
+# config_has distinguishes present-but-empty from absent (finding 2)
+config_set ado.email ""
+config_has ado.email || { echo "FAIL has present-empty"; exit 1; }
+config_has ado.nope  && { echo "FAIL has absent"; exit 1; }
+
+# optional key: present-empty is a no-op even without a TTY (does NOT die, does NOT re-ask)
+CLAUDEFILES_ASSUME_TTY=0 config_ensure_optional context7_api_key "key?" --secret
+[ "$(config_get context7_api_key)" = "sekret" ] || { echo "FAIL optional clobbered"; exit 1; }
+
+# array setter trims and drops empties
+config_set_array ado.orgs "a, b ,c,"
+[ "$(config_get ado.orgs)" = '["a", "b", "c"]' ] || { echo "FAIL array"; exit 1; }
+
+# required string still fails fast without TTY (does not hang)
+if CLAUDEFILES_ASSUME_TTY=0 config_ensure ado.pat.a "pat?" 2>/dev/null; then
   echo "FAIL should have errored without TTY"; exit 1; fi
 echo "PASS test-config"
 ```
@@ -194,7 +237,12 @@ Expected: FAIL (`config.sh` / functions not defined).
 
 ```python
 #!/usr/bin/env python3
-"""get/set dotted keys in secrets.json. Never executed as a shell file."""
+"""get/set/has dotted keys in secrets.json. Never executed as a shell file.
+Ops: get <key>            -> prints scalar (bool as lowercase true/false, list as JSON)
+     has <key>            -> exit 0 if key present (even if empty), else exit 1
+     set <key> <str>      -> store a string
+     setbool <key> <t|f>  -> store a real JSON boolean (validated)
+     setarray <key> <csv> -> store a trimmed, non-empty list"""
 import json, os, sys
 
 def load(path):
@@ -203,12 +251,13 @@ def load(path):
     except FileNotFoundError:
         return {}
 
-def get(d, dotted):
+def walk(d, dotted):          # -> (found, value)
     cur = d
     for part in dotted.split("."):
-        if not isinstance(cur, dict) or part not in cur: return ""
+        if not isinstance(cur, dict) or part not in cur:
+            return (False, "")
         cur = cur[part]
-    return cur if cur is not None else ""
+    return (True, cur)
 
 def setk(d, dotted, value):
     cur = d
@@ -218,17 +267,36 @@ def setk(d, dotted, value):
     cur[parts[-1]] = value
     return d
 
+def emit(v):
+    if isinstance(v, bool):        print("true" if v else "false")   # NOT Python's True/False
+    elif isinstance(v, (dict, list)): print(json.dumps(v))
+    elif v is None:                print("")
+    else:                          print(v)
+
+def persist(d, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f: json.dump(d, f, indent=2)
+    os.chmod(path, 0o600)
+
 if __name__ == "__main__":
     op, path = sys.argv[1], sys.argv[2]
     d = load(path)
     if op == "get":
-        v = get(d, sys.argv[3])
-        print(v if not isinstance(v, (dict, list)) else json.dumps(v))
+        found, v = walk(d, sys.argv[3]); emit(v if found else "")
+    elif op == "has":
+        found, _ = walk(d, sys.argv[3]); sys.exit(0 if found else 1)
     elif op == "set":
-        setk(d, sys.argv[3], sys.argv[4])
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f: json.dump(d, f, indent=2)
-        os.chmod(path, 0o600)
+        setk(d, sys.argv[3], sys.argv[4]); persist(d, path)
+    elif op == "setbool":
+        val = sys.argv[4].strip().lower()
+        if val not in ("true", "false"):
+            sys.stderr.write(f"setbool expects true|false, got {sys.argv[4]!r}\n"); sys.exit(2)
+        setk(d, sys.argv[3], val == "true"); persist(d, path)
+    elif op == "setarray":
+        items = [s.strip() for s in sys.argv[4].split(",") if s.strip()]
+        setk(d, sys.argv[3], items); persist(d, path)
+    else:
+        sys.stderr.write(f"unknown op {op}\n"); sys.exit(2)
 ```
 
 - [ ] **Step 4: Implement `config.sh`**
@@ -239,15 +307,21 @@ if __name__ == "__main__":
 # config.sh — secrets.json accessors with TTY-aware prompting.
 CLAUDEFILES_CONFIG_DIR="${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}"
 _CFG_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/py/config_io.py"
-config_path() { echo "$CLAUDEFILES_CONFIG_DIR/secrets.json"; }
-config_get()  { python3 "$_CFG_PY" get "$(config_path)" "$1"; }
-config_set()  { python3 "$_CFG_PY" set "$(config_path)" "$1" "$2"; }
+config_path()      { echo "$CLAUDEFILES_CONFIG_DIR/secrets.json"; }
+config_get()       { python3 "$_CFG_PY" get      "$(config_path)" "$1"; }
+config_has()       { python3 "$_CFG_PY" has      "$(config_path)" "$1"; }   # exit 0 if key present
+config_set()       { python3 "$_CFG_PY" set      "$(config_path)" "$1" "$2"; }
+config_set_bool()  { python3 "$_CFG_PY" setbool  "$(config_path)" "$1" "$2"; }
+config_set_array() { python3 "$_CFG_PY" setarray "$(config_path)" "$1" "$2"; }
 
 _has_tty() { [ "${CLAUDEFILES_ASSUME_TTY:-}" = "1" ] && return 0
              [ "${CLAUDEFILES_ASSUME_TTY:-}" = "0" ] && return 1
              [ -t 0 ]; }
 
-config_ensure() { # config_ensure <dotted.key> <prompt> [--secret]
+# flags are real JSON booleans; get emits them lowercase so this compare works.
+config_flag() { [ "$(config_get "flags.$1")" = "true" ] && echo true || echo false; }
+
+config_ensure() { # config_ensure <key> <prompt> [--secret] — REQUIRED string, empty rejected
   local key="$1" prompt="$2" secret="${3:-}" cur; cur="$(config_get "$key")"
   [ -n "$cur" ] && return 0
   if _has_tty; then
@@ -258,7 +332,30 @@ config_ensure() { # config_ensure <dotted.key> <prompt> [--secret]
     die "missing required config '$key' and no TTY to prompt (set it in $(config_path))"
   fi
 }
-config_flag() { local v; v="$(config_get "flags.$1")"; [ "$v" = "true" ] && echo true || echo false; }
+
+config_ensure_optional() { # <key> <prompt> [--secret] — ask ONCE; empty is valid + remembered
+  local key="$1" prompt="$2" secret="${3:-}"
+  config_has "$key" && return 0                 # already asked (even if stored empty) -> never re-ask
+  if _has_tty; then
+    local val
+    if [ "$secret" = "--secret" ]; then read -rs -p "$prompt " val; echo; else read -r -p "$prompt " val; fi
+    config_set "$key" "$val"                     # persists "" too -> config_has true next run
+  else
+    config_set "$key" ""                         # no TTY: record empty, do not fail (optional)
+  fi
+}
+
+config_ensure_flag() { # <name> <prompt> — ask ONCE for a boolean, persist as JSON bool
+  local name="$1" prompt="$2"
+  config_has "flags.$name" && return 0
+  if _has_tty; then
+    local val; read -r -p "$prompt " val
+    case "${val,,}" in y|yes|true|1) val=true ;; *) val=false ;; esac
+    config_set_bool "flags.$name" "$val"
+  else
+    die "missing required flag 'flags.$name' and no TTY to prompt (set it in $(config_path))"
+  fi
+}
 ```
 
 - [ ] **Step 5: Run the test, expect PASS**
@@ -282,7 +379,7 @@ git commit -m "feat: secrets.json store with TTY-aware prompting"
 
 **Interfaces:**
 - Consumes: `common.sh`.
-- Produces: `settings_apply <hook_abs_path>` — writes `~/.claude/settings.json` replacing managed keys from the template (with `<HOOK_PATH>` substituted), preserving unknown top-level keys from any existing file.
+- Produces: `settings_apply <hook_abs_path> <dotnet_enabled:true|false>` — writes `~/.claude/settings.json` replacing managed keys from the template (with `<HOOK_PATH>` substituted), preserving unknown top-level keys from any existing file. When `dotnet_enabled` is `false`, the dotnet plugin entry **and** its marketplace are dropped so settings.json stays consistent with what `plugins_apply` actually installed (finding 6).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -300,13 +397,24 @@ cat > "$h/.claude/settings.json" <<'EOF'
 { "hooks": {"SessionStart":[{"hooks":[{"type":"command","command":"/old/stale/path.sh"}]}]},
   "myCustomKey": {"keep":"me"} }
 EOF
-settings_apply "/new/hook/detect-dotnet.sh"
+settings_apply "/new/hook/detect-dotnet.sh" true
 python3 - "$h/.claude/settings.json" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1]))
 assert d["myCustomKey"]=={"keep":"me"}, "unknown key not preserved"
 cmd=d["hooks"]["SessionStart"][0]["hooks"][0]["command"]
 assert cmd=="/new/hook/detect-dotnet.sh", f"stale hook survived: {cmd}"
 assert d["model"]=="opus[1m]" and d["theme"]=="dark"
+assert d["enabledPlugins"].get("dotnet@dotnet-agent-skills") is True, "dotnet plugin missing when enabled"
+print("ok dotnet=on")
+PY
+# dotnet disabled -> plugin AND marketplace must be absent (finding 6)
+settings_apply "/new/hook/detect-dotnet.sh" false
+python3 - "$h/.claude/settings.json" <<'PY'
+import json,sys; d=json.load(open(sys.argv[1]))
+assert "dotnet@dotnet-agent-skills" not in d["enabledPlugins"], "dotnet plugin present while disabled"
+assert "dotnet-agent-skills" not in d["extraKnownMarketplaces"], "dotnet marketplace present while disabled"
+assert d["enabledPlugins"]["superpowers@claude-plugins-official"] is True
+assert d["myCustomKey"]=={"keep":"me"}, "unknown key not preserved across re-apply"
 print("PASS test-settings")
 PY
 ```
@@ -344,13 +452,18 @@ PY
 
 ```python
 #!/usr/bin/env python3
-"""Merge managed keys from a template over an existing settings.json,
-preserving unknown top-level keys. Usage: jsonmerge.py <template> <target> <hook_path>"""
+"""Merge managed keys from a template over an existing settings.json, preserving
+unknown top-level keys.
+Usage: jsonmerge.py <template> <target> <hook_path> <dotnet_enabled:true|false>"""
 import json, os, sys
 MANAGED = ["model","effortLevel","tui","theme","enabledPlugins","extraKnownMarketplaces","hooks"]
 tmpl, target, hook = sys.argv[1], sys.argv[2], sys.argv[3]
+dotnet = (len(sys.argv) > 4 and sys.argv[4] == "true")
 managed = json.load(open(tmpl))
 managed["hooks"]["SessionStart"][0]["hooks"][0]["command"] = hook
+if not dotnet:                    # keep settings.json consistent with plugins_apply (finding 6)
+    managed["enabledPlugins"].pop("dotnet@dotnet-agent-skills", None)
+    managed["extraKnownMarketplaces"].pop("dotnet-agent-skills", None)
 try:
     existing = json.load(open(target))
 except FileNotFoundError:
@@ -367,10 +480,10 @@ json.dump(out, open(target, "w"), indent=2)
 ```bash
 # settings.sh — own ~/.claude/settings.json (managed keys), preserve the rest.
 _SET_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-settings_apply() { # settings_apply <hook_abs_path>
-  local hook="$1" tmpl="$_SET_DIR/../claude/settings/settings.template.json"
-  python3 "$_SET_DIR/py/jsonmerge.py" "$tmpl" "$HOME/.claude/settings.json" "$hook"
-  log "settings.json applied (hook: $hook)"
+settings_apply() { # settings_apply <hook_abs_path> <dotnet_enabled:true|false>
+  local hook="$1" dotnet="${2:-false}" tmpl="$_SET_DIR/../claude/settings/settings.template.json"
+  python3 "$_SET_DIR/py/jsonmerge.py" "$tmpl" "$HOME/.claude/settings.json" "$hook" "$dotnet"
+  log "settings.json applied (hook: $hook, dotnet: $dotnet)"
 }
 ```
 
@@ -515,7 +628,7 @@ git commit -m "feat: idempotent dotnet plugin install (ported from chezmoi)"
 
 **Interfaces:**
 - Consumes: `common.sh`, `config.sh`, fake `claude`.
-- Produces: `mcp_apply` — builds the server set from `secrets.json`, reconciles against `~/.config/claudefiles/managed-mcp.json` (removes exactly previously-managed names, adds the current set, rewrites the manifest).
+- Produces: `mcp_apply` — builds the server set from `secrets.json`, reconciles against `~/.config/claudefiles/managed-mcp.json` (the manifest holds the full desired `{name: config}` dict). If the desired set equals the manifest, it returns without issuing any `claude` call (call-idempotent, finding 7); otherwise it removes exactly the previously-managed names, adds the current set, and rewrites the manifest.
 
 - [ ] **Step 1: Write the failing test (covers the finding-5 migration case)**
 
@@ -526,13 +639,13 @@ here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; h="$(setup_fixture_home)"
 source "$cf/lib/common.sh"; source "$cf/lib/config.sh"; source "$cf/lib/mcp.sh"
 
-# round 1: context7 + ado org "old"
-CLAUDEFILES_ASSUME_TTY=1
-config_set flags.context7 true; config_set context7_api_key ""
-config_set flags.ado true; config_set ado.email me@x.com
+# round 1: context7 (free tier) + ado org "old"
+config_set_bool flags.context7 true; config_set context7_api_key ""
+config_set_bool flags.ado true; config_set ado.email me@x.com
+config_set_array ado.orgs "old"
 python3 - <<PY
 import json;p="$(config_path)";d=json.load(open(p))
-d["ado"]["orgs"]=["old"]; d["ado"]["pat"]={"old":"tok1"}; json.dump(d,open(p,"w"))
+d["ado"]["pat"]={"old":"tok1"}; json.dump(d,open(p,"w"))
 PY
 mcp_apply
 grep -q "mcp add-json --scope user context7" "$(fake_claude_calls)" || { echo FAIL add-c7; exit 1; }
@@ -540,15 +653,21 @@ grep -q "azureDevOps-old" "$(fake_claude_calls)" || { echo FAIL add-old; exit 1;
 manifest="$h/.config/claudefiles/managed-mcp.json"
 grep -q "azureDevOps-old" "$manifest" || { echo FAIL manifest; exit 1; }
 
-# round 2: drop org "old" -> must be removed via manifest, unmanaged server untouched
+# round 2: drop org "old" -> removed via manifest; an unmanaged user server is never swept
 : > "$(fake_claude_calls)"
+config_set_array ado.orgs ""            # empty -> []
 python3 - <<PY
 import json;p="$(config_path)";d=json.load(open(p))
-d["ado"]["orgs"]=[]; d["ado"]["pat"]={}; json.dump(d,open(p,"w"))
+d["ado"]["pat"]={}; json.dump(d,open(p,"w"))
 PY
 mcp_apply
 grep -q "mcp remove --scope user azureDevOps-old" "$(fake_claude_calls)" || { echo FAIL remove-old; exit 1; }
-grep -q "mcp remove --scope user someUserServer" "$(fake_claude_calls)" && { echo FAIL nuked-user; exit 1; }
+grep -q "someUserServer" "$(fake_claude_calls)" && { echo FAIL nuked-user; exit 1; }
+
+# round 3: nothing changed -> zero claude calls (finding 7, call-idempotent)
+: > "$(fake_claude_calls)"
+mcp_apply
+[ -s "$(fake_claude_calls)" ] && { echo "FAIL churn on unchanged"; exit 1; }
 echo "PASS test-mcp"
 ```
 
@@ -560,19 +679,34 @@ echo "PASS test-mcp"
 #!/usr/bin/env python3
 """Emit {name: mcp-config} JSON from secrets.json. No secrets are printed to logs;
 callers pass the JSON straight to `claude mcp add-json`."""
-import base64, json, os, sys
+import base64, json, os, shutil, sys
 cfg = json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}
-flags = cfg.get("flags", {}); servers = {}
-if flags.get("playwright"):
+flags = cfg.get("flags", {})
+
+def on(name):                       # canonical flags are real bools; tolerate legacy "true" strings
+    v = flags.get(name)
+    return v is True or v == "true"
+
+def chromium_path():                # resolver for the standalone case (finding 8)
+    override = (cfg.get("playwright") or {}).get("chromium_path")
+    if override:
+        return override
+    for p in ("/usr/bin/chromium", "/usr/bin/chromium-browser"):
+        if os.path.exists(p):
+            return p
+    return shutil.which("chromium") or shutil.which("chromium-browser") or "/usr/bin/chromium"
+
+servers = {}
+if on("playwright"):
     servers["playwright"] = {"type":"stdio","command":"npx",
-        "args":["-y","@playwright/mcp@latest","--executable-path","/usr/bin/chromium"]}
-if flags.get("context7"):
+        "args":["-y","@playwright/mcp@latest","--executable-path", chromium_path()]}
+if on("context7"):
     args = ["-y","@upstash/context7-mcp"]
     if cfg.get("context7_api_key"): args += ["--api-key", cfg["context7_api_key"]]
     servers["context7"] = {"type":"stdio","command":"npx","args":args}
-if flags.get("azure_mcp"):
+if on("azure_mcp"):
     servers["azure"] = {"type":"stdio","command":"npx","args":["-y","@azure/mcp@latest","server","start"]}
-if flags.get("ado"):
+if on("ado"):
     ado = cfg.get("ado", {}); email = ado.get("email","")
     for org in ado.get("orgs", []):
         pat = ado.get("pat", {}).get(org, "")
@@ -587,28 +721,36 @@ print(json.dumps(servers))
 
 ```bash
 # mcp.sh — reconcile user-scope MCP servers against a managed manifest.
+# The manifest stores the FULL desired {name: config} dict (not just names), so a
+# changed PAT/api-key is detected too, and an unchanged set is a genuine no-op.
 _MCP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _MCP_MANIFEST() { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-mcp.json"; }
 mcp_apply() {
   local cb; cb="$(claude_bin)"
   local servers; servers="$(python3 "$_MCP_DIR/../claude/mcp/build_servers.py" "$(config_path)")"
   local manifest; manifest="$(_MCP_MANIFEST)"
-  # remove exactly what we managed last time (never a prefix sweep)
+  # call-idempotent: desired == last-applied -> touch nothing (finding 7)
+  if [ -f "$manifest" ] && \
+     python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))==json.loads(sys.argv[2]) else 1)' \
+        "$manifest" "$servers"; then
+    log "MCP servers unchanged"; return 0
+  fi
+  # remove exactly what we managed last time (manifest keys; never a prefix sweep)
   if [ -f "$manifest" ]; then
-    python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1]))))' "$manifest" \
+    python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).keys()))' "$manifest" \
       | while read -r name; do [ -n "$name" ] && "$cb" mcp remove --scope user "$name" >/dev/null 2>&1 || true; done
   fi
   # add current set
-  local names; names="$(echo "$servers" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)))')"
-  echo "$names" | while read -r name; do
-    [ -z "$name" ] && continue
-    local one; one="$(echo "$servers" | python3 -c 'import json,sys;print(json.dumps(json.load(sys.stdin)[sys.argv[1]]))' "$name")"
-    "$cb" mcp remove --scope user "$name" >/dev/null 2>&1 || true
-    "$cb" mcp add-json --scope user "$name" "$one"
-  done
-  # rewrite manifest
+  echo "$servers" | python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin).keys()))' \
+    | while read -r name; do
+        [ -z "$name" ] && continue
+        one="$(echo "$servers" | python3 -c 'import json,sys;print(json.dumps(json.load(sys.stdin)[sys.argv[1]]))' "$name")"
+        "$cb" mcp remove --scope user "$name" >/dev/null 2>&1 || true
+        "$cb" mcp add-json --scope user "$name" "$one"
+      done
+  # rewrite manifest with the full desired dict
   mkdir -p "$(dirname "$manifest")"
-  echo "$servers" | python3 -c 'import json,sys;json.dump(list(json.load(sys.stdin)),open(sys.argv[1],"w"))' "$manifest"
+  printf '%s' "$servers" > "$manifest"
   log "MCP servers reconciled"
 }
 ```
@@ -669,8 +811,14 @@ cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
 EOF
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 cp "$h/.claude/settings.json" "$h/first.json"
+manifest="$h/.config/claudefiles/managed-mcp.json"; cp "$manifest" "$h/first-manifest.json"
+: > "$CLAUDE_FAKE_LOG"                       # capture only the SECOND run's claude calls
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
-diff "$h/first.json" "$h/.claude/settings.json" || { echo "FAIL not idempotent"; exit 1; }
+diff "$h/first.json" "$h/.claude/settings.json" || { echo "FAIL settings not idempotent"; exit 1; }
+diff "$h/first-manifest.json" "$manifest"       || { echo "FAIL manifest not idempotent"; exit 1; }
+# 2nd run must not re-install the plugin or re-add MCP (stateful fake reflects prior state, finding 7)
+grep -q "plugin install" "$CLAUDE_FAKE_LOG" && { echo "FAIL reinstalled plugin on 2nd run"; exit 1; }
+grep -q "mcp add-json"    "$CLAUDE_FAKE_LOG" && { echo "FAIL re-added MCP on 2nd run"; exit 1; }
 python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$h/.claude/settings.json"
 echo "PASS test-setup-idempotent"
 ```
@@ -686,19 +834,38 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for m in common config settings skills plugins mcp hooks; do source "$ROOT/lib/$m.sh"; done
 
-log "1/7 preflight"; require_cmd git; require_cmd python3; require_cmd claude || warn "claude not on PATH yet"
+log "1/7 preflight"; require_cmd git; require_cmd python3
+command -v claude >/dev/null 2>&1 || warn "claude not on PATH yet (install it, then re-run)"
 
 log "2/7 config"
-if [ "${1:-}" = "--non-interactive" ]; then export CLAUDEFILES_ASSUME_TTY=0; fi
-config_ensure_all() {   # prompt only for flags/secrets that gate enabled features
-  config_ensure flags.dotnet_skills "Install .NET skills plugin? (true/false)"
-  config_ensure flags.context7 "Enable Context7 MCP? (true/false)"
-  [ "$(config_flag context7)" = true ] && config_ensure context7_api_key "Context7 API key (empty for free tier)" --secret || true
-  config_ensure flags.playwright "Enable Playwright MCP? (true/false)"
+[ "${1:-}" = "--non-interactive" ] && export CLAUDEFILES_ASSUME_TTY=0
+config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
+  config_ensure_flag dotnet_skills "Install .NET skills plugin? (y/N)"
+  config_ensure_flag context7      "Enable Context7 MCP? (y/N)"
+  if [ "$(config_flag context7)" = true ]; then
+    config_ensure_optional context7_api_key "Context7 API key (empty = free tier)" --secret
+  fi
+  config_ensure_flag playwright "Enable Playwright MCP? (y/N)"
+  config_ensure_flag azure_mcp  "Enable Azure MCP? (y/N)"
+  config_ensure_flag ado        "Enable Azure DevOps MCP? (y/N)"
+  if [ "$(config_flag ado)" = true ]; then
+    config_ensure ado.email "Azure DevOps account email"
+    if ! config_has ado.orgs; then
+      if _has_tty; then
+        read -r -p "Azure DevOps organizations (comma-separated): " _orgs
+        config_set_array ado.orgs "$_orgs"
+      else
+        die "flags.ado is true but ado.orgs is unset and no TTY to prompt (set it in $(config_path))"
+      fi
+    fi
+    for org in $(config_get ado.orgs | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)))'); do
+      config_ensure "ado.pat.$org" "PAT for organization '$org'" --secret
+    done
+  fi
 }
 config_ensure_all
 
-log "3/7 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")"
+log "3/7 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)"
 log "4/7 skills";        skills_apply "$ROOT"
 log "5/7 plugins";       [ "$(config_flag dotnet_skills)" = true ] && plugins_apply || log "skip plugins"
 log "6/7 mcp";           mcp_apply
@@ -708,7 +875,9 @@ python3 -m json.tool "$HOME/.claude/settings.json" >/dev/null && log "settings.j
 log "Done. Restart Claude Code sessions to pick up skills and hook."
 ```
 
-Note: `config_ensure` with `flags.*` treats any existing value as satisfied, so `--non-interactive` with a seeded file never prompts.
+Notes:
+- Each gate uses `config_has` (Task 2), so a seeded `secrets.json` satisfies every branch and `--non-interactive` never prompts — including the empty-but-set `context7_api_key` (finding 2) and the `ado:false` short-circuit.
+- On a fresh interactive machine the flow now also collects Azure MCP and, for ADO, the email + org list + one PAT per org (finding 3) — the ownership transfer of ADO secrets into claudefiles is complete.
 
 - [ ] **Step 4: Run → `PASS test-setup-idempotent`.**
 
@@ -921,11 +1090,21 @@ PY
 - [ ] **Step 2: Verify no value was lost and run setup from the dev checkout**
 
 ```bash
-cat ~/.config/claudefiles/secrets.json      # eyeball: flags + any keys present
+# redacted verifier — prints presence, NEVER secret values (finding 5)
+python3 - <<'PY'
+import json, os
+d = json.load(open(os.path.expanduser("~/.config/claudefiles/secrets.json")))
+print("flags:", d.get("flags"))
+ado = d.get("ado", {})
+print("ado.email:", ado.get("email") or "(empty)")
+print("ado.orgs:", ado.get("orgs"))
+print("ado.pat set for orgs:", [o for o, v in ado.get("pat", {}).items() if v])
+print("context7_api_key:", "set" if d.get("context7_api_key") else "(empty / free tier)")
+PY
 cd ~/dev/claudefiles && ./setup.sh --non-interactive
 ```
 
-Expected: settings/skills/plugins/MCP applied without prompts; `claude mcp list` shows the expected servers.
+Expected: flags/orgs look right (no raw PATs printed); then settings/skills/plugins/MCP applied without prompts; `claude mcp list` shows the expected servers.
 
 - [ ] **Step 3: No commit** (migration touches only `~/.config`, never the repo).
 
@@ -950,9 +1129,24 @@ echo "PASS test-secrets-not-tracked"
 
 Run it → `PASS`. Commit.
 
-- [ ] **Step 2: Make the GitHub repo public**
+- [ ] **Step 2: Scan the FULL history for secrets, then make the repo public**
+
+`git ls-files` (Step 1) only sees the current tree. Before flipping to public, scan every ref — a secret committed and later deleted still ships in history (finding 4). This is a hard gate: a hit stops the task for manual review (`git filter-repo`/BFG) before publishing.
 
 ```bash
+cd ~/dev/claudefiles
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks detect --no-banner --redact --log-opts="--all" \
+    || { echo "ABORT: gitleaks found secrets in history — scrub before publishing"; exit 1; }
+else
+  # focused fallback: markers that only a leaked secret would produce (not paths/hashes)
+  if git log -p --all \
+     | grep -nEi 'PERSONAL_ACCESS_TOKEN|api[-_]?key|-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{16,}|xox[baprs]-|AKIA[0-9A-Z]{16}'; then
+    echo "ABORT: possible secret in git history — review the hits above before publishing"; exit 1
+  fi
+fi
+echo "history scan clean"
+
 gh repo edit stpntkhnv/claudefiles --visibility public --accept-visibility-change-consequences
 gh repo view stpntkhnv/claudefiles --json visibility -q .visibility   # -> "public"
 ```
@@ -997,6 +1191,22 @@ git commit -m "docs: public repo, one-command smoke, secret-tracking guard"
 
 **Placeholder scan:** no TBD/"handle edge cases"/"similar to Task N"; every code step carries complete code. ✓
 
-**Type/name consistency:** `config_get/config_set/config_ensure/config_flag/config_path`, `settings_apply`, `skills_apply`, `plugins_apply`, `mcp_apply`, `hooks_hook_path`, `apply_if_changed` — used consistently across tasks and the orchestrator. Managed-key list matches the template and §Global Constraints. ✓
+**Type/name consistency:** `config_get/config_has/config_set/config_set_bool/config_set_array/config_ensure/config_ensure_optional/config_ensure_flag/config_flag/config_path`, `settings_apply <hook> <dotnet>`, `skills_apply`, `plugins_apply`, `mcp_apply`, `hooks_hook_path`, `apply_if_changed` — used consistently across tasks and the orchestrator. Managed-key list matches the template and §Global Constraints; flag values are JSON booleans everywhere they are read (bash `config_flag` + python `on()`). ✓
 
 **Gap noted & folded:** `setup_azure` in chezmoi still installs the Azure CLI (kept, §9.2); the azure *MCP* flag is `flags.azure_mcp` in secrets.json (Task 6) — the two are intentionally separate, documented in Task 11 Step 2.
+
+### Round-2 review resolution (Codex)
+
+| # | Finding | Resolution | Tasks touched |
+|---|---------|-----------|---------------|
+| 1 | bool/string flag mixing | Flags stored as real JSON booleans; `config_io get` emits lowercase; typed `setbool`/`config_set_bool`; `build_servers` `on()` also tolerates legacy strings. Test: bool round-trip + literal `false`. | 2, 6 |
+| 2 | optional `context7_api_key` treated as required | `config_has` (presence ≠ emptiness) + `config_ensure_optional` (ask once, empty valid, no-TTY records empty w/o dying). setup.sh uses it. | 2, 8 |
+| 3 | fresh machine never collects Azure/ADO | `config_ensure_all` now gates `azure_mcp`, `ado`, `ado.email`, `ado.orgs` (array), and one PAT per org. | 8 |
+| 4 | history scan before public | Hard gate over `--all` refs (gitleaks or focused grep) before `gh repo edit --visibility public`. | 13 |
+| 5 | `cat secrets.json` leaks PATs | Redacted verifier: flags, org names, key-present booleans; never values. | 12 |
+| 6 | `dotnet_skills=false` yet plugin enabled | `jsonmerge` drops the dotnet plugin + marketplace when the flag is false; `settings_apply` takes the flag. Test asserts both on/off. | 3, 8 |
+| 7 | idempotency test too weak | Fake `claude` is now stateful; `mcp_apply` skips when manifest == desired (call-idempotent). Test asserts no plugin reinstall / no MCP re-add / stable manifest on 2nd run, and zero MCP calls when unchanged. | 1, 6, 8 |
+| 8 | playwright chromium "lost detection" | **Premise disputed** — the chezmoi original also hardcoded `/usr/bin/chromium` (relied on `01-install-packages`). Adopted as hardening for the standalone case: `chromium_path()` resolver + `playwright.chromium_path` override. | 6 |
+| 9 | commit trailer vs examples | Global Constraints states the exact `Co-Authored-By` trailer once; examples abbreviate it. | Constraints |
+
+**Also fixed in passing:** preflight `require_cmd claude` would `die` before its `|| warn` ever ran — softened to a `command -v` check with a warning, so a machine without `claude` yet gets a clear message instead of an abort.
