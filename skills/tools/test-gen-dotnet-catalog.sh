@@ -2,8 +2,11 @@
 # Tests for gen-dotnet-catalog.sh — runs against the real dotnet-skills checkout.
 set -euo pipefail
 
-GEN="/home/stsiapan/devTools/skills/tools/gen-dotnet-catalog.sh"
-REPO="/home/stsiapan/devTools/skills/dotnet-skills"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GEN="$SCRIPT_DIR/gen-dotnet-catalog.sh"
+# Canonicalized: the generator emits canonical absolute paths, and the verbatim
+# check below compares path STRINGS — an uncollapsed ".." would break the match.
+REPO="$(cd "$SCRIPT_DIR/../dotnet-skills" && pwd)"
 OUTDIR="$(mktemp -d)"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }

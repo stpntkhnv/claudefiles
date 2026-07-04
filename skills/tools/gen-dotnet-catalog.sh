@@ -6,12 +6,17 @@
 # text is the disambiguation that routing accuracy depends on.
 set -euo pipefail
 
-REPO="${1:-/home/stsiapan/devTools/skills/dotnet-skills}"
-OUTDIR="${2:-/home/stsiapan/devTools/claude/skills/dotnet-router}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${1:-$SCRIPT_DIR/../dotnet-skills}"
+OUTDIR="${2:-$SCRIPT_DIR/../../claude/skills/dotnet-router}"
 MAX_INDEX_CHARS=8000     # ~2k tokens at ~4 chars/token
 MAX_DOMAIN_CHARS=40000   # ~10k tokens per domain file
 
 [ -d "$REPO/plugins" ] || { echo "ERROR: no plugins/ under $REPO" >&2; exit 1; }
+# Canonicalize: emitted skill paths and INDEX pointers must be absolute.
+REPO="$(cd "$REPO" && pwd)"
+mkdir -p "$OUTDIR"
+OUTDIR="$(cd "$OUTDIR" && pwd)"
 
 # Extract the description field from YAML frontmatter. Handles: single-line
 # plain/quoted scalars, block scalars (>, >-, >+, |, |-), and quoted strings

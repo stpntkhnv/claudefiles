@@ -2,7 +2,8 @@
 # Tests for the SessionStart .NET-detection hook.
 set -euo pipefail
 
-HOOK="/home/stsiapan/devTools/claude/hooks/detect-dotnet.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK="$SCRIPT_DIR/../../claude/hooks/detect-dotnet.sh"
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
 [ -x "$HOOK" ] || fail "hook missing or not executable"
@@ -32,7 +33,7 @@ CLAUDE_PROJECT_DIR="$t" "$HOOK" >/dev/null || fail "non-zero exit on negative"
 
 # 5. Speed on a real large tree: under 2 seconds
 start=$(date +%s%N)
-CLAUDE_PROJECT_DIR="/home/stsiapan/devTools" "$HOOK" >/dev/null
+CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." "$HOOK" >/dev/null
 elapsed_ms=$(( ($(date +%s%N) - start) / 1000000 ))
 [ "$elapsed_ms" -lt 2000 ] || fail "hook too slow: ${elapsed_ms}ms"
 
