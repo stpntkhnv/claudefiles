@@ -47,6 +47,13 @@ while IFS= read -r name; do
   grep -qF -- "$name" "$OUTDIR/INDEX.md" || fail "INDEX misses skill name: $name"
 done < <(cat "$OUTDIR"/CATALOG-*.md | sed -n 's/^- \*\*\([^*]*\)\*\*.*/\1/p')
 
+# 5c. Name-list lines are strictly ", "-separated (regression guard: paste
+# delimiter-list cycling once produced mixed "a,b c" separators)
+while IFS= read -r line; do
+  echo "$line" | grep -Eq '^[a-z0-9-]+(, [a-z0-9-]+)*$' \
+    || fail "malformed name-list line in INDEX: $line"
+done < <(awk '/^### /{getline; print}' "$OUTDIR/INDEX.md")
+
 # 6. No duplicate skill names — name→path cross-referencing needs uniqueness
 dups="$(cat "$OUTDIR"/CATALOG-*.md | grep -o '^- \*\*[^*]*\*\*' | sort | uniq -d)"
 [ -z "$dups" ] || fail "duplicate skill names: $dups"
