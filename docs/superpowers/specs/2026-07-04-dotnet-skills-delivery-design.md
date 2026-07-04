@@ -123,7 +123,7 @@ find . -maxdepth 6 \( -name .git -o -name node_modules -o -name bin -o -name obj
 
 ## Объём имплементации
 
-1. `gen-dotnet-catalog.sh` + сгенерированный `CATALOG.md`.
+1. `gen-dotnet-catalog.sh` + сгенерированные `INDEX.md` и 16 файлов `CATALOG-<домен>.md`.
 2. `~/.claude/skills/dotnet-router/SKILL.md` (description + тело: правила этапов и правило Service root).
 3. SessionStart-хук в `~/.claude/settings.json` (глубокий поиск с отсечением).
 4. Установка плагина `dotnet` из маркетплейса dotnet/skills (LSP).
