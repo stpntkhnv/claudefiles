@@ -1,7 +1,7 @@
 # Design: claudefiles as the single source of truth for Claude config
 
 **Date:** 2026-07-04
-**Status:** Draft — awaiting user review
+**Status:** Draft rev. 2 — Codex review incorporated (findings 2–7); 2 decisions open (§9.4 repo visibility, §9.5 interactivity). Finding 1's premise disputed (git-repo externals do support SSH) and reframed as §9.4.
 **Topic:** Consolidate all `~/.claude` configuration into the standalone `claudefiles`
 repo; shrink chezmoi to a thin bootstrap (install `claude` + pull & trigger claudefiles);
 move secret collection into claudefiles.
@@ -84,9 +84,14 @@ Idempotent; safe to re-run; the update path after `git pull`. Ordered phases:
    git/bash/coreutils/awk/python3. Warn (don't fail) on missing optional deps (`dotnet` SDK).
 2. **Load config** — read `~/.config/claudefiles/secrets.env` if present; otherwise prompt
    (§4.3). Honor a `--non-interactive` flag that requires all values to come from env/file.
-3. **settings.json** — render `~/.claude/settings.json` from a template in the repo, filling
-   machine-specific values (the SessionStart hook path → the deploy/dev path of *this* run,
-   `$HOME`-relative). Preserve unmanaged keys via a merge (python), never blind-overwrite.
+3. **settings.json** — render `~/.claude/settings.json` from a repo template. **Managed keys
+   are replaced wholesale; unknown top-level keys are preserved.** Managed set fully owned by
+   claudefiles: `hooks`, `enabledPlugins`, `extraKnownMarketplaces`, `model`, `effortLevel`,
+   `tui`, `theme` — replacing (not merging) `hooks` is what prevents a stale hardcoded hook
+   path from surviving migration. Any other top-level key in an existing file is carried over
+   untouched. The SessionStart hook path is filled from *this* run's repo location,
+   `$HOME`-relative. The separate `settings.local.json` (machine permissions,
+   `enabledMcpjsonServers`) is **not** touched — it stays local.
 4. **Skills** — install personal skills into `~/.claude/skills/`: `context7-mcp` (real dir),
    `dotnet-router` (symlink to the repo's `claude/skills/dotnet-router`). Regenerate the
    dotnet catalog with absolute paths for this machine (existing `gen-dotnet-catalog.sh`).
@@ -103,8 +108,13 @@ Idempotent; safe to re-run; the update path after `git pull`. Ordered phases:
 
 Move `.chezmoitemplates/mcp-servers` + `run_onchange_after_configure-claude-mcp` into
 claudefiles as a script (no chezmoi templating). It builds the server set from the loaded
-config and applies it with the same idempotent pattern: sweep known names with
-`claude mcp remove --scope user`, then `claude mcp add-json --scope user <name> <json>`.
+config, then reconciles against a **manifest of previously-managed names** at
+`~/.config/claudefiles/managed-mcp.json`: `claude mcp remove --scope user` exactly the names
+in the manifest (never a name-prefix sweep — that could delete a user's own server), then
+`claude mcp add-json --scope user <name> <json>` the current set, then rewrite the manifest.
+A dropped `azureDevOps-<org>` disappears cleanly; unmanaged servers are never touched. (The
+current chezmoi script's comment admits the prefix approach leaks renamed ADO orgs — this
+fixes that.)
 
 Servers (enabled per flags in secrets.env):
 - `playwright` — `npx @playwright/mcp@latest --executable-path /usr/bin/chromium` (host/container
@@ -118,17 +128,21 @@ moves into `setup.sh` so container-only differences stay in one place.
 
 ### 4.3 Secret & flag handling
 
-- **Store:** `~/.config/claudefiles/secrets.env` — outside the repo, `chmod 600`, never committed.
-- **Schema:** feature flags (`SETUP_CONTEXT7`, `SETUP_PLAYWRIGHT`, `SETUP_AZURE_MCP`,
-  `SETUP_ADO`, `SETUP_DOTNET_SKILLS`) + secrets (`CONTEXT7_API_KEY`, `ADO_ORGS`, `ADO_EMAIL`,
-  `ADO_PAT_<org>`).
-- **Prompt-once:** on interactive run, prompt only for missing keys; persist answers.
-- **Non-interactive:** `--non-interactive` reads everything from env/existing file; error if a
-  required value is absent. Enables CI/containers and the chezmoi trigger to run unattended
-  once the file exists.
-- **Safety:** repo `.gitignore` already ignores clones/logs; add an explicit guard so no
-  `secrets.env` or rendered secret can ever be tracked. A test asserts `git ls-files` contains
-  no secret-bearing paths.
+- **Store:** `~/.config/claudefiles/secrets.json` — JSON, outside the repo, `chmod 600`, never
+  committed. **JSON, not a shell `.env`:** it is *parsed* (python, already a dependency), never
+  `source`d, so it is data not executable code, and per-org PATs live in a nested map keyed by
+  the raw org string — sidestepping that env-var names cannot contain `-` / `.` / case
+  collisions.
+- **Schema:** `{ flags: { context7, playwright, azure_mcp, ado, dotnet_skills },
+  context7_api_key, ado: { email, orgs: [...], pat: { "<org>": "<token>" } } }`.
+- **Invocation mode (resolves the first-run ambiguity):** `setup.sh` picks mode by TTY. With a
+  TTY and missing required values → prompt once and persist. Without a TTY (CI, container,
+  unattended `chezmoi apply`) → strictly non-interactive: use the existing file, and **fail
+  fast** with a message listing missing keys — never hang on a prompt. chezmoi's `run_after_`
+  inherits the terminal of `chezmoi apply`, so an interactive apply prompts and an unattended
+  one errors rather than blocking.
+- **Safety:** `.gitignore` guards the store; a test asserts `git ls-files` exposes no
+  secret-bearing path.
 
 ### 4.4 chezmoi changes (the thin bootstrap)
 
@@ -136,11 +150,22 @@ moves into `setup.sh` so container-only differences stay in one place.
 to Claude config (git name/email, `setup_codex`, container options).
 
 **Add:**
-- `.chezmoiexternal.toml` entry: `[".local/share/claudefiles"] type="git-repo"
-  url=git@github.com:stpntkhnv/claudefiles.git refreshPeriod="168h" pull.args=["--ff-only"]`.
-- `run_onchange_after_setup-claudefiles.sh.tmpl` keyed on claudefiles HEAD (`{{ output "git"
-  "-C" (joinPath .chezmoi.homeDir ".local/share/claudefiles") "rev-parse" "HEAD" }}`) that
-  runs the deploy copy's `setup.sh`.
+- `.chezmoiexternal.toml` entry, `type = "git-repo"`, `refreshPeriod = "168h"`,
+  `pull.args = ["--ff-only"]`. **URL scheme depends on repo visibility (open decision §9.4):**
+  git-repo externals shell out to `git clone`/`git pull`, so SSH URLs *are* supported
+  (chezmoi documents `url = "git@host:org/repo.git"` for private repos). But a fresh-machine
+  SSH clone needs the key present first, so a private+SSH external must be guarded with
+  `{{ if stat (joinPath .chezmoi.homeDir ".ssh/id_ed25519") }}` and the key provisioned in a
+  `before_` step. A public repo over `https://github.com/stpntkhnv/claudefiles.git` clones
+  keyless — simplest for the one-command fresh-machine path. The design commits no secrets
+  (§4.3), so public is viable.
+- A **plain `run_after_setup-claudefiles.sh.tmpl`** (not `run_onchange_`): at execution time —
+  externals are already updated by then (chezmoi Application Order: "`run_after_` scripts can
+  safely depend on externals") — it reads the deploy copy's current `git rev-parse HEAD`,
+  compares against `~/.config/claudefiles/last-applied-head`, and runs `setup.sh` only when
+  they differ (writing the new HEAD on success). This avoids the onchange-hash template being
+  rendered before the external exists (first-apply failure) or reading a stale HEAD;
+  `setup.sh` idempotency is the backstop.
 
 **Remove (moved to claudefiles):** `run_onchange_after_configure-claude-plugins.sh.tmpl`,
 `run_onchange_after_configure-claude-mcp.sh.tmpl`, `.chezmoitemplates/mcp-servers`,
@@ -189,6 +214,11 @@ Extend the existing `skills/tools/` tests:
 - Plugin install guards are idempotent.
 - settings.json render is valid JSON and the hook path resolves.
 - No secret-bearing path is tracked by git.
+- **`run_after` HEAD-compare** (review finding 2): simulate an external update (HEAD changes) →
+  `setup.sh` runs on the *same* apply; unchanged HEAD → no-op. Guards against next-apply-lag and
+  first-apply failure.
+- **MCP manifest migration** (review finding 5): an `azureDevOps-<org>` present last run but
+  dropped from config is removed via the manifest, while an unmanaged user server is left intact.
 - (Manual/container) full `chezmoi apply` one-command smoke, appended to the existing
   smoke-results doc.
 
@@ -200,3 +230,9 @@ Extend the existing `skills/tools/` tests:
    flag moves to claudefiles — acceptable, or move the whole azure concern?
 3. **settings.json ownership of `enabledPlugins`:** claudefiles owns the file and lists enabled
    plugins; chezmoi no longer touches it. Confirm.
+4. **Repo visibility & clone auth (review finding 1):** public repo + `https` (keyless
+   fresh-machine clone, simplest) vs private + SSH (guard the external on an ssh-key `stat`,
+   provision the key in a `before_` step). No secrets are committed either way. **Needs your call.**
+5. **Interactivity default (review finding 3):** `setup.sh` prompts when a TTY is present and
+   secrets are missing, else fails fast non-interactively. Confirm this is the behavior you want
+   (interactive `chezmoi apply` prompts; unattended apply errors rather than hangs).
