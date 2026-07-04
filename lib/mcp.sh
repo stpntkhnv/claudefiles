@@ -29,5 +29,6 @@ mcp_apply() {
   # rewrite manifest with the full desired dict
   mkdir -p "$(dirname "$manifest")"
   printf '%s' "$servers" > "$manifest"
+  chmod 600 "$manifest"
   log "MCP servers reconciled"
 }

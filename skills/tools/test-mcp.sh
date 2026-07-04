@@ -17,6 +17,7 @@ grep -q "mcp add-json --scope user context7" "$(fake_claude_calls)" || { echo FA
 grep -q "azureDevOps-old" "$(fake_claude_calls)" || { echo FAIL add-old; exit 1; }
 manifest="$h/.config/claudefiles/managed-mcp.json"
 grep -q "azureDevOps-old" "$manifest" || { echo FAIL manifest; exit 1; }
+[ "$(stat -c '%a' "$manifest")" = "600" ] || { echo "FAIL manifest perms $(stat -c '%a' "$manifest")"; exit 1; }
 
 # round 2: drop org "old" -> removed via manifest; an unmanaged user server is never swept
 : > "$(fake_claude_calls)"
