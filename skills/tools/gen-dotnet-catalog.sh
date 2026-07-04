@@ -107,7 +107,8 @@ for plugin_dir in "$REPO"/plugins/*/; do
   fi
   {
     echo "### $plugin (${#names[@]} skills) — \`$OUTDIR/CATALOG-$plugin.md\`"
-    printf '%s\n' "${names[@]}" | paste -sd ', ' -
+    printf '%s, ' "${names[@]}" | sed 's/, $//'
+    echo
     echo
   } >> "$index"
   domains=$((domains + 1))
