@@ -1,0 +1,18 @@
+{
+  "model": "opus[1m]",
+  "effortLevel": "xhigh",
+  "tui": "fullscreen",
+  "theme": "dark",
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "dotnet@dotnet-agent-skills": true
+  },
+  "extraKnownMarketplaces": {
+    "dotnet-agent-skills": { "source": { "source": "github", "repo": "dotnet/skills" } }
+  },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "<HOOK_PATH>" } ] }
+    ]
+  }
+}
