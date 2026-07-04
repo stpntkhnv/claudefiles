@@ -1,10 +1,10 @@
 # dotnet-skills catalog — dotnet-aspnetcore
 
 - **configuring-opentelemetry-dotnet** — Configure OpenTelemetry distributed tracing, metrics, and logging in ASP.NET Core using the .NET OpenTelemetry SDK. Use when adding observability, setting up OTLP exporters, creating custom metrics/spans, or troubleshooting distributed trace correlation.
-  `/home/stsiapan/devTools/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/configuring-opentelemetry-dotnet/SKILL.md`
+  `/home/stsiapan/dev/claudefiles/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/configuring-opentelemetry-dotnet/SKILL.md`
 - **convert-blazor-server-to-webapp** — Guides conversion of a pre-.NET 8 Blazor Server app into a .NET 8+ Blazor Web App. USE FOR: migrating apps that use AddServerSideBlazor and MapBlazorHub to the AddRazorComponents/MapRazorComponents model, converting _Host.cshtml to an App.razor root component, replacing blazor.server.js with blazor.web.js, migrating CascadingAuthenticationState to a service, adopting new Blazor Web App features like enhanced navigation and streaming rendering. DO NOT USE FOR: apps that are already Blazor Web Apps (already use AddRazorComponents and MapRazorComponents), Blazor WebAssembly or hosted Blazor WebAssembly apps (different migration path), apps that should stay on the Blazor Server hosting model without converting, or apps still targeting .NET Framework.
-  `/home/stsiapan/devTools/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/convert-blazor-server-to-webapp/SKILL.md`
+  `/home/stsiapan/dev/claudefiles/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/convert-blazor-server-to-webapp/SKILL.md`
 - **dotnet-webapi** — Guides creation and modification of ASP.NET Core Web API endpoints with correct HTTP semantics, OpenAPI metadata, and error handling. USE FOR: adding new API endpoints (controllers or minimal APIs), wiring up OpenAPI/Swagger, creating .http test files, setting up global error handling middleware. DO NOT USE FOR: general C# coding style, EF Core data access or query optimization (use optimizing-ef-core-queries), frontend/Blazor work, gRPC services, or SignalR hubs.
-  `/home/stsiapan/devTools/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/dotnet-webapi/SKILL.md`
+  `/home/stsiapan/dev/claudefiles/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/dotnet-webapi/SKILL.md`
 - **minimal-api-file-upload** — File upload endpoints in ASP.NET minimal APIs (.NET 8+)
-  `/home/stsiapan/devTools/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/minimal-api-file-upload/SKILL.md`
+  `/home/stsiapan/dev/claudefiles/skills/dotnet-skills/plugins/dotnet-aspnetcore/skills/minimal-api-file-upload/SKILL.md`
