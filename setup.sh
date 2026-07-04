@@ -1,65 +1,45 @@
 #!/usr/bin/env bash
-# Bootstrap the dotnet-router delivery system on this machine.
-# Idempotent — safe to re-run (also the update path after `git pull`).
-# Usage: ./setup.sh   (optionally CLAUDE_DIR=/custom/path ./setup.sh)
+# Install the full ~/.claude config on this machine. Idempotent; the update path too.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+for m in common config settings skills plugins mcp hooks; do source "$ROOT/lib/$m.sh"; done
 
-echo "==> 1/5 dotnet-skills source clone"
-if [ ! -d "$ROOT/skills/dotnet-skills/.git" ]; then
-  git clone --depth 1 https://github.com/dotnet/skills "$ROOT/skills/dotnet-skills"
-else
-  git -C "$ROOT/skills/dotnet-skills" pull --ff-only || echo "WARN: pull failed, using existing checkout"
-fi
+log "1/7 preflight"; require_cmd git; require_cmd python3
+command -v claude >/dev/null 2>&1 || warn "claude not on PATH yet (install it, then re-run)"
 
-echo "==> 2/5 generate catalog (absolute paths for this machine)"
-"$ROOT/skills/tools/gen-dotnet-catalog.sh" "$ROOT/skills/dotnet-skills" "$ROOT/claude/skills/dotnet-router"
+log "2/7 config"
+[ "${1:-}" = "--non-interactive" ] && export CLAUDEFILES_ASSUME_TTY=0
+config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
+  config_ensure_flag dotnet_skills "Install .NET skills plugin? (y/N)"
+  config_ensure_flag context7      "Enable Context7 MCP? (y/N)"
+  if [ "$(config_flag context7)" = true ]; then
+    config_ensure_optional context7_api_key "Context7 API key (empty = free tier)" --secret
+  fi
+  config_ensure_flag playwright "Enable Playwright MCP? (y/N)"
+  config_ensure_flag azure_mcp  "Enable Azure MCP? (y/N)"
+  config_ensure_flag ado        "Enable Azure DevOps MCP? (y/N)"
+  if [ "$(config_flag ado)" = true ]; then
+    config_ensure ado.email "Azure DevOps account email"
+    if ! config_has ado.orgs; then
+      if _has_tty; then
+        read -r -p "Azure DevOps organizations (comma-separated): " _orgs
+        config_set_array ado.orgs "$_orgs"
+      else
+        die "flags.ado is true but ado.orgs is unset and no TTY to prompt (set it in $(config_path))"
+      fi
+    fi
+    for org in $(config_get ado.orgs | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)))'); do
+      config_ensure "ado.pat.$org" "PAT for organization '$org'" --secret
+    done
+  fi
+}
+config_ensure_all
 
-echo "==> 3/5 symlink skill into $CLAUDE_DIR/skills"
-mkdir -p "$CLAUDE_DIR/skills"
-dst="$CLAUDE_DIR/skills/dotnet-router"
-if [ -e "$dst" ] && [ ! -L "$dst" ]; then
-  echo "ERROR: $dst exists and is not a symlink — inspect its contents and remove it manually first" >&2
-  exit 1
-fi
-ln -sfnT "$ROOT/claude/skills/dotnet-router" "$dst"
-
-echo "==> 4/5 wire SessionStart hook into $CLAUDE_DIR/settings.json"
-S="$CLAUDE_DIR/settings.json"
-mkdir -p "$CLAUDE_DIR"
-[ -f "$S" ] || echo '{}' > "$S"
-cp "$S" "$S.bak-dotnet-router"
-HOOK_CMD="$ROOT/claude/hooks/detect-dotnet.sh" python3 - "$S" <<'PY'
-import json, os, sys
-path = sys.argv[1]
-cmd = os.environ["HOOK_CMD"]
-cfg = json.load(open(path))
-entries = cfg.setdefault("hooks", {}).setdefault("SessionStart", [])
-already = any(h.get("command") == cmd
-              for e in entries for h in e.get("hooks", []))
-if already:
-    print("hook: already wired")
-else:
-    entries.append({"hooks": [{"type": "command", "command": cmd}]})
-    json.dump(cfg, open(path, "w"), indent=2, ensure_ascii=False)
-    print("hook: wired")
-PY
-
-echo "==> 5/5 verify"
-"$ROOT/skills/tools/test-gen-dotnet-catalog.sh"
-"$ROOT/skills/tools/test-detect-dotnet.sh"
-test -f "$dst/SKILL.md" && test -f "$dst/INDEX.md" && echo "skill+catalog reachable via $dst"
-python3 -m json.tool "$S" > /dev/null && echo "settings.json valid"
-
-echo
-if [ -z "$(find "$CLAUDE_DIR/plugins" -maxdepth 4 -iname '*superpowers*' -print -quit 2>/dev/null)" ]; then
-  echo "WARN: superpowers plugin not found — the router works without it, but the"
-  echo "      stage integration (plans as transport, Skills blocks, subagent dispatch)"
-  echo "      relies on it. Install inside Claude Code, then restart:"
-  echo "        /plugin install superpowers@claude-plugins-official"
-fi
-echo "Done. Restart Claude Code sessions to pick up the skill and hook."
-echo "Optional (Roslyn LSP, needs .NET 10 SDK):"
-echo "  claude plugin marketplace add dotnet/skills && claude plugin install dotnet@dotnet-agent-skills"
+log "3/7 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)"
+log "4/7 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)"
+log "5/7 plugins";       [ "$(config_flag dotnet_skills)" = true ] && plugins_apply || log "skip plugins"
+log "6/7 mcp";           mcp_apply
+log "7/7 verify"
+python3 -m json.tool "$HOME/.claude/settings.json" >/dev/null && log "settings.json valid"
+"$ROOT/skills/tools/test-gen-dotnet-catalog.sh" >/dev/null 2>&1 || warn "catalog self-test skipped"
+log "Done. Restart Claude Code sessions to pick up skills and hook."
