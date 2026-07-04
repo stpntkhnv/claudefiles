@@ -506,7 +506,7 @@ git commit -m "feat: own settings.json managed keys, preserve unknown keys"
 
 **Interfaces:**
 - Consumes: `common.sh`, `$CF/skills/tools/gen-dotnet-catalog.sh` (existing), `$CF/skills/dotnet-skills` (existing read-only clone).
-- Produces: `skills_apply <repo_root>` — installs `~/.claude/skills/context7-mcp` (copy) and `~/.claude/skills/dotnet-router` (symlink → `<repo_root>/claude/skills/dotnet-router`) and regenerates the catalog.
+- Produces: `skills_apply <repo_root> <dotnet_enabled:true|false>` — always installs `~/.claude/skills/context7-mcp` (copy). When `dotnet_enabled` is `true`, it also clones `dotnet/skills` into `<repo_root>/skills/dotnet-skills` **if missing** (the catalog's source of truth — fixes fresh-machine installs), regenerates the catalog with this machine's absolute paths, and symlinks `~/.claude/skills/dotnet-router → <repo_root>/claude/skills/dotnet-router`. When `false`, only context7-mcp is installed (no dotnet-router — consistent with skipping the dotnet plugin).
 
 - [ ] **Step 1: Bring the context7-mcp skill into the repo**
 
@@ -526,11 +526,19 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; h="$(setup_fixture_home)"
 source "$cf/lib/common.sh"; source "$cf/lib/skills.sh"
-skills_apply "$cf"
+# Keep the unit test hermetic: the clone-if-missing path needs the network, so it is
+# exercised by the Task 13 container smoke, not here. On the dev machine the clone
+# exists, so this asserts the regenerate+symlink behavior without cloning.
+[ -d "$cf/skills/dotnet-skills/.git" ] || { echo "SKIP test-skills (clone absent; covered by smoke)"; exit 0; }
+skills_apply "$cf" true
 [ -f "$h/.claude/skills/context7-mcp/SKILL.md" ] || { echo FAIL c7; exit 1; }
 [ -L "$h/.claude/skills/dotnet-router" ] || { echo FAIL symlink; exit 1; }
 [ "$(readlink "$h/.claude/skills/dotnet-router")" = "$cf/claude/skills/dotnet-router" ] || { echo FAIL target; exit 1; }
 [ -f "$h/.claude/skills/dotnet-router/INDEX.md" ] || { echo FAIL index; exit 1; }
+# dotnet disabled -> context7 only, no dotnet-router symlink
+h2="$(setup_fixture_home)"; skills_apply "$cf" false
+[ -f "$h2/.claude/skills/context7-mcp/SKILL.md" ] || { echo FAIL c7-off; exit 1; }
+[ -L "$h2/.claude/skills/dotnet-router" ] && { echo FAIL router-should-be-absent; exit 1; }
 echo "PASS test-skills"
 ```
 
@@ -543,16 +551,24 @@ echo "PASS test-skills"
 ```bash
 # skills.sh — install personal skills into ~/.claude/skills.
 _SK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-skills_apply() { # skills_apply <repo_root>
-  local root="$1" dst="$HOME/.claude/skills"
+skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false>
+  local root="$1" dotnet="${2:-false}" dst="$HOME/.claude/skills"
   mkdir -p "$dst"
-  # context7-mcp: real dir (copy)
+  # context7-mcp: real dir (copy) — always
   mkdir -p "$dst/context7-mcp"
   cp "$root/claude/skills/context7-mcp/SKILL.md" "$dst/context7-mcp/SKILL.md"
-  # dotnet catalog: regenerate with absolute paths for this machine
-  if [ -d "$root/skills/dotnet-skills/.git" ]; then
-    "$root/skills/tools/gen-dotnet-catalog.sh" "$root/skills/dotnet-skills" "$root/claude/skills/dotnet-router"
+  if [ "$dotnet" != true ]; then
+    log "skills installed (context7-mcp); dotnet-router skipped (dotnet disabled)"
+    return 0
   fi
+  # dotnet-skills clone: the catalog's source of truth. Clone if missing so a FRESH
+  # machine gets correct absolute paths (setup.sh used to do this; keep it here).
+  if [ ! -d "$root/skills/dotnet-skills/.git" ]; then
+    log "cloning dotnet/skills (catalog source)"
+    git clone --depth 1 https://github.com/dotnet/skills "$root/skills/dotnet-skills"
+  fi
+  # catalog: regenerate with absolute paths for THIS machine
+  "$root/skills/tools/gen-dotnet-catalog.sh" "$root/skills/dotnet-skills" "$root/claude/skills/dotnet-router"
   # dotnet-router: symlink into the repo
   local d="$dst/dotnet-router"
   [ -e "$d" ] && [ ! -L "$d" ] && die "$d exists and is not a symlink; remove it manually"
@@ -564,8 +580,9 @@ skills_apply() { # skills_apply <repo_root>
 - [ ] **Step 5: Run test → `PASS test-skills`. Commit.**
 
 ```bash
-git add lib/skills.sh claude/skills/context7-mcp/SKILL.md skills/tools/test-skills.sh
-git commit -m "feat: install personal skills (context7-mcp copy, dotnet-router symlink)"
+git add lib/skills.sh claude/skills/context7-mcp/SKILL.md skills/tools/test-skills.sh \
+        claude/skills/dotnet-router/          # regenerated catalog: paths now ~/dev/claudefiles
+git commit -m "feat: install personal skills (context7-mcp copy, dotnet-router clone+symlink)"
 ```
 
 ---
@@ -866,7 +883,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
 config_ensure_all
 
 log "3/7 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)"
-log "4/7 skills";        skills_apply "$ROOT"
+log "4/7 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)"
 log "5/7 plugins";       [ "$(config_flag dotnet_skills)" = true ] && plugins_apply || log "skip plugins"
 log "6/7 mcp";           mcp_apply
 log "7/7 verify"
@@ -1210,3 +1227,5 @@ git commit -m "docs: public repo, one-command smoke, secret-tracking guard"
 | 9 | commit trailer vs examples | Global Constraints states the exact `Co-Authored-By` trailer once; examples abbreviate it. | Constraints |
 
 **Also fixed in passing:** preflight `require_cmd claude` would `die` before its `|| warn` ever ran — softened to a `command -v` check with a warning, so a machine without `claude` yet gets a clear message instead of an abort.
+
+**Pre-flight fix (execution):** `skills_apply` dropped the `dotnet/skills` clone that the old `setup.sh` performed, so a fresh machine would ship the committed catalog with another machine's absolute paths → dotnet-router `Read`s fail. Restored clone-if-missing inside `skills_apply`, gated on the `dotnet_skills` flag (Task 4), and threaded the flag through `setup.sh` (Task 8).
