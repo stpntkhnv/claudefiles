@@ -5,3 +5,9 @@ skills/superpowers/
 
 # runtime, never tracked
 /lib/py/__pycache__/
+
+# generated per-machine dotnet-router catalog (absolute paths for the local clone);
+# setup.sh / skills_apply regenerates it, so tracking it would dirty every checkout
+# and break the deploy copy's `git pull --ff-only` refresh. SKILL.md stays tracked.
+/claude/skills/dotnet-router/INDEX.md
+/claude/skills/dotnet-router/CATALOG-*.md
