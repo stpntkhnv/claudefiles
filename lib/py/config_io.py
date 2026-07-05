@@ -12,6 +12,8 @@ def load(path):
         with open(path) as f: return json.load(f)
     except FileNotFoundError:
         return {}
+    except json.JSONDecodeError as e:
+        sys.stderr.write(f"corrupt JSON in {path}: {e}\n"); sys.exit(2)
 
 def walk(d, dotted):          # -> (found, value)
     cur = d
@@ -37,8 +39,9 @@ def emit(v):
 
 def persist(d, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f: json.dump(d, f, indent=2)
-    os.chmod(path, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f: json.dump(d, f, indent=2)
+    os.chmod(path, 0o600)   # tighten even if the file pre-existed with a looser mode
 
 if __name__ == "__main__":
     op, path = sys.argv[1], sys.argv[2]

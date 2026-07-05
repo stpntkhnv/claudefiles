@@ -26,9 +26,11 @@ python3 - <<PY
 import json;p="$(config_path)";d=json.load(open(p))
 d["ado"]["pat"]={}; json.dump(d,open(p,"w"))
 PY
+printf '%s\n' "someUserServer" >> "$CLAUDE_FAKE_STATE/mcp"
 mcp_apply
 grep -q "mcp remove --scope user azureDevOps-old" "$(fake_claude_calls)" || { echo FAIL remove-old; exit 1; }
 grep -q "someUserServer" "$(fake_claude_calls)" && { echo FAIL nuked-user; exit 1; }
+grep -qx "someUserServer" "$CLAUDE_FAKE_STATE/mcp" || { echo "FAIL: unmanaged server was removed"; exit 1; }
 
 # round 3: nothing changed -> zero claude calls (finding 7, call-idempotent)
 : > "$(fake_claude_calls)"

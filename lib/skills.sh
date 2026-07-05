@@ -1,5 +1,4 @@
 # skills.sh — install personal skills into ~/.claude/skills.
-_SK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false>
   local root="$1" dotnet="${2:-false}" dst="$HOME/.claude/skills"
   mkdir -p "$dst"

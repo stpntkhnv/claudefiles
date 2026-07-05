@@ -15,6 +15,8 @@ try:
     existing = json.load(open(target))
 except FileNotFoundError:
     existing = {}
+except json.JSONDecodeError as e:
+    sys.stderr.write(f"corrupt JSON in {target}: {e}\n"); sys.exit(2)
 out = dict(existing)              # keep unknown keys
 for k in MANAGED:                 # replace managed keys wholesale
     out[k] = managed[k]

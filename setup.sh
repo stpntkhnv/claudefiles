@@ -20,12 +20,13 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
   config_ensure_flag ado        "Enable Azure DevOps MCP? (y/N)"
   if [ "$(config_flag ado)" = true ]; then
     config_ensure ado.email "Azure DevOps account email"
-    if ! config_has ado.orgs; then
+    _orgs_json="$(config_get ado.orgs)"
+    if [ -z "$_orgs_json" ] || [ "$_orgs_json" = "[]" ]; then
       if _has_tty; then
-        read -r -p "Azure DevOps organizations (comma-separated): " _orgs
+        read -r -p "Azure DevOps organizations (comma-separated): " _orgs || true
         config_set_array ado.orgs "$_orgs"
       else
-        die "flags.ado is true but ado.orgs is unset and no TTY to prompt (set it in $(config_path))"
+        die "flags.ado is true but ado.orgs is empty and no TTY to prompt (set it in $(config_path))"
       fi
     fi
     for org in $(config_get ado.orgs | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)))'); do
@@ -40,6 +41,6 @@ log "4/7 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)"
 log "5/7 plugins";       if [ "$(config_flag dotnet_skills)" = true ]; then plugins_apply || warn "plugin install failed (rest of config still applied)"; else log "skip plugins"; fi
 log "6/7 mcp";           mcp_apply
 log "7/7 verify"
-python3 -m json.tool "$HOME/.claude/settings.json" >/dev/null && log "settings.json valid"
-"$ROOT/skills/tools/test-gen-dotnet-catalog.sh" >/dev/null 2>&1 || warn "catalog self-test skipped"
+if python3 -m json.tool "$HOME/.claude/settings.json" >/dev/null 2>&1; then log "settings.json valid"; else die "settings.json is invalid after apply"; fi
+"$ROOT/skills/tools/test-gen-dotnet-catalog.sh" >/dev/null 2>&1 || warn "catalog self-test FAILED"
 log "Done. Restart Claude Code sessions to pick up skills and hook."
