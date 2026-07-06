@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Rev. 2** — Codex review of the plan incorporated (see the final section). Blockers fixed: Task 2 no longer ships a transient plugins regression (it updates `setup.sh`'s invocation in the same commit); Task 3's no-TTY idempotency rationale is corrected. Plugin guards rewritten to a captured-listing + whole-token match; `_claude_present` added for readiness; case E made root-safe; `dep_require` validates its call; README gains a real Dependencies section; the smoke check decouples the exit status. The commit-trailer requirement is retained (session/repo convention — pushback recorded).
+
 **Goal:** Extend `setup.sh` so one run on a fresh Arch machine reaches a *ready* Claude Code env: check (and offer to install) the system dependencies enabled features need, and install **both** plugins — `superpowers` always, `dotnet` by flag.
 
-**Architecture:** A new flag-aware `lib/deps.sh` module (offer-install via `pacman`, every path non-fatal) runs as phase 3, after `config` resolves the flags and before `settings`. `lib/plugins.sh` is rewritten so `plugins_apply <dotnet_enabled>` installs `superpowers` unconditionally and `dotnet` by flag, with idempotent add/install guards. `setup.sh` renumbers to 8 phases, ungates plugins, and ends with a non-fatal readiness summary (`readiness_report`, living in `deps.sh`).
+**Architecture:** A new flag-aware `lib/deps.sh` module (offer-install via `pacman`, every path non-fatal) runs as phase 3, after `config` resolves the flags and before `settings`. `lib/plugins.sh` is rewritten so `plugins_apply <dotnet_enabled>` installs `superpowers` unconditionally and `dotnet` by flag, with idempotent add/install guards. `setup.sh` renumbers to 8 phases, ungates plugins, and ends with a non-fatal readiness summary (`readiness_report`, in `deps.sh`). A shared whole-token matcher (`_has_token`) lives in `common.sh`.
 
 **Tech Stack:** Bash 4+ (`set -euo pipefail`), `pacman`, `python3` (stdlib only), the Claude Code plugin CLI. Tests: fake binaries on an isolated `PATH` + fixture `$HOME`, matching the repo's existing `skills/tools/test-*.sh` pattern.
 
@@ -22,37 +24,40 @@ Every task's requirements implicitly include this section. Values copied verbati
 - **All plugin-CLI calls go through `"$cb"` (`claude_bin`).**
 - **bash is required** — no POSIX rewrite (`setup.sh` shebang; `config.sh` already uses `${x,,}`/`read -p`).
 - **Public repo:** no secret ever in a tracked file; secrets live only in `~/.config/claudefiles/` (`chmod 600`), outside git. The generated `dotnet-router` catalog stays gitignored.
-- **Commit trailer** (every commit): `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+- **Commit trailer** (every commit): `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` — session/harness requirement; the repo's existing commits already carry it.
 
 ## File Structure
 
 | File | Status | Responsibility |
 |------|--------|----------------|
-| `lib/deps.sh` | **create** | Flag-aware dependency check + offer-install (`_pacman_install`, `_offer_install`, `dep_require`, `_chromium_present`, `deps_apply`) and the non-fatal `readiness_report` (+ `_have_node_npx`, `_rdy`). |
-| `lib/plugins.sh` | **rewrite** | `plugins_apply <dotnet_enabled>` — superpowers always, dotnet by flag; factored `_ensure_marketplace` / `_ensure_plugin` guards. |
-| `setup.sh` | **modify** | Source `deps`; insert phase 3 `deps`; renumber `/7`→`/8`; ungate plugins (pass flag); call `readiness_report` in verify. |
-| `skills/tools/test-deps.sh` | **create** | Unit-tests `lib/deps.sh` on an isolated `PATH` with fake `pacman`/`sudo`/dep binaries. |
+| `lib/common.sh` | **modify** | Add `_has_token <needle>` — whole-token, fixed-string stdin matcher shared by plugins + readiness. |
+| `lib/deps.sh` | **create** | Flag-aware dependency check + offer-install (`_pacman_install`, `_offer_install`, `dep_require`, `_chromium_present`, `deps_apply`) and the non-fatal `readiness_report` (+ `_have_node_npx`, `_claude_present`, `_rdy`). |
+| `lib/plugins.sh` | **rewrite** | `plugins_apply <dotnet_enabled>` — superpowers always, dotnet by flag; factored `_ensure_marketplace` / `_ensure_plugin` guards over a captured listing. |
+| `setup.sh` | **modify** | Task 2: ungate plugins (pass flag) in the existing phase. Task 3: source `deps`; insert phase 3 `deps`; renumber `/7`→`/8`; call `readiness_report` in verify. |
+| `skills/tools/test-deps.sh` | **create** | Unit-tests `lib/deps.sh` on an isolated `PATH` with fake `pacman`/`sudo`/dep binaries; unit-tests `_has_token`. |
 | `skills/tools/test-plugins.sh` | **rewrite** | Assert superpowers-always / dotnet-by-flag / idempotent / substring-collision-safe / failing-`list`-tolerant. |
 | `skills/tools/test-setup-idempotent.sh` | **modify** | Add fake `pacman`/`sudo`; assert a full second run touches nothing (no install, no `pacman`). |
-| `README.md` | **modify** | Document 8 phases + a Dependencies section. |
+| `README.md` | **modify** | 8-phase list, a dedicated Dependencies section, corrected install note + layout comment. |
 | `claude/settings/settings.template.json` | unchanged | `superpowers` already `true` — now consistent with always installing it. |
 
-**Task order:** 1 → 2 → 3 → 4. Each task keeps the whole `skills/tools/` suite green (no task leaves a red test). Tasks 1 and 2 are module-level and tested in isolation; Task 2 rewrites `plugins.sh` and its test together — `setup.sh` is rewired to the new `plugins_apply` signature in Task 3 (transiently, between Tasks 2 and 3, `setup.sh` still calls the old gated form; this breaks no test and is corrected in Task 3).
+**Task order:** 1 → 2 → 3 → 4. Every task keeps the whole `skills/tools/` suite green **and** every commit is behaviorally correct: Task 2 rewrites `plugins.sh`, its test, **and** `setup.sh`'s plugins invocation in one commit — so no intermediate commit silently changes plugin behavior. Task 3 then adds the deps phase, renumbering, and readiness (its full-file `setup.sh` rewrite supersedes Task 2's one-line edit).
 
 ---
 
-### Task 1: `lib/deps.sh` — dependency check + offer-install + readiness
+### Task 1: shared token matcher + `lib/deps.sh` (deps check, offer-install, readiness)
 
 **Files:**
+- Modify: `lib/common.sh` (add `_has_token`)
 - Create: `lib/deps.sh`
 - Test: `skills/tools/test-deps.sh`
 
 **Interfaces:**
-- Consumes (from already-sourced modules): `log`, `warn` (`lib/common.sh`); `_has_tty`, `config_get`, `claude_bin` (`lib/config.sh` / `lib/common.sh`).
-- Produces (used by Task 3 in `setup.sh`):
+- Consumes (from already-sourced modules): `log`, `warn`, `claude_bin` (`lib/common.sh`); `_has_tty`, `config_get` (`lib/config.sh`).
+- Produces (used by Task 2 & Task 3):
+  - `_has_token <needle>` (in `common.sh`) — reads whitespace-delimited tokens from stdin; exit 0 iff some token equals `<needle>` exactly. Fixed-string, whole-token (no substring, no regex). Empty stdin → exit 1.
   - `deps_apply <ctx7> <playwright> <azure> <ado> <dotnet>` — all args `true|false`; offer-installs each needed dep; always returns 0.
   - `readiness_report <ctx7> <playwright> <azure> <ado> <dotnet>` — prints a non-fatal env summary; always returns 0.
-  - Helpers (module-internal, exercised by the test): `_pacman_install <pkg...>`, `_offer_install <why> <pkg...>`, `dep_require <why> <check-cmd...> -- <pkg...>`, `_chromium_present`, `_have_node_npx`, `_rdy <label> <fix> <check-cmd...>`.
+  - Helpers (module-internal): `_pacman_install <pkg...>`, `_offer_install <why> <pkg...>`, `dep_require <why> <check-cmd...> -- <pkg...>`, `_chromium_present`, `_have_node_npx`, `_claude_present`, `_rdy <label> <fix> <check-cmd...>`.
 
 - [ ] **Step 1: Write the failing test** — `skills/tools/test-deps.sh`
 
@@ -60,7 +65,7 @@ The dev box has real `node`/`npx`/`dotnet`/`chromium`/`sudo`/`pacman` in `/usr/b
 
 ```bash
 #!/usr/bin/env bash
-# test-deps.sh — unit tests for lib/deps.sh on an ISOLATED PATH.
+# test-deps.sh — unit tests for lib/deps.sh (+ _has_token) on an ISOLATED PATH.
 # node/npx/dotnet/chromium/sudo/pacman all exist in /usr/bin on the dev box, so the
 # "absent" cases only hold if PATH contains just our fakes + the handful of coreutils
 # the code and harness need. We symlink those into a fresh sandbox per case.
@@ -73,9 +78,10 @@ for c in bash env python3 id mktemp mkdir grep chmod cat rm ln dirname; do REAL[
 
 fails=0
 chk() { local d="$1"; shift; if "$@"; then printf 'ok   %s\n' "$d"; else printf 'FAIL %s\n' "$d"; fails=1; fi; }
-isempty() { [ ! -s "$1" ]; }
-haspac()  { grep -qF -- "$1" "$2"; }
-nogrep_i(){ ! grep -qiF -- "$1" "$2"; }
+isempty()  { [ ! -s "$1" ]; }
+haspac()   { grep -qF -- "$1" "$2"; }
+nogrep_i() { ! grep -qiF -- "$1" "$2"; }
+not_token(){ ! _has_token "$1"; }
 
 mk_sandbox() {   # sets SB, HOME, isolated PATH, PACLOG; wipes any leaked config-dir override
   SB="$(mktemp -d)"
@@ -100,6 +106,12 @@ exec "$@"
 EOF
 chmod +x "$BIN/sudo"; }
 load() { source "$cf/lib/common.sh"; source "$cf/lib/config.sh"; source "$cf/lib/deps.sh"; }
+
+# _has_token: whole-token fixed match (collision-safe, no regex) — used by plugins + readiness
+mk_sandbox; load
+chk "_has_token: whole token matches"       _has_token "b"  <<< "a b c"
+chk "_has_token: substring does NOT match"  not_token   "b"  <<< "abx bxc"
+chk "_has_token: empty stdin -> no match"   not_token   "b"  <<< ""
 
 # A: everything present -> pacman never called
 mk_sandbox; fake_pacman; fake_sudo; present node; present npx; present chromium; present dotnet
@@ -126,11 +138,15 @@ load; export CLAUDEFILES_ASSUME_TTY=0
 deps_apply true false false false false <<< "y"
 chk "no TTY -> pacman not called" isempty "$PACLOG"
 
-# E: sudo absent + non-root -> warn + manual, no pacman (finding 2)
+# E: sudo absent (finding 2). Non-root -> manual only; root -> pacman runs directly (branch flips).
 mk_sandbox; fake_pacman           # NO fake_sudo; real sudo not on the isolated PATH
 load; export CLAUDEFILES_ASSUME_TTY=1
 deps_apply true false false false false <<< "y"
-chk "sudo absent -> pacman not run (manual only)" isempty "$PACLOG"
+if [ "$(id -u)" -eq 0 ]; then
+  chk "root + no sudo -> pacman called directly"     haspac "pacman -S --needed --noconfirm nodejs npm" "$PACLOG"
+else
+  chk "non-root + no sudo -> pacman not run (manual)" isempty "$PACLOG"
+fi
 
 # F: node present but npx absent -> still treated as missing (finding 4)
 mk_sandbox; fake_pacman; fake_sudo; present node   # npx absent
@@ -164,9 +180,26 @@ chk "dotnet flag + dotnet absent -> installs dotnet-sdk" haspac "pacman -S --nee
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/test-deps.sh`
-Expected: FAIL — `lib/deps.sh` does not exist yet, so `source .../lib/deps.sh` errors (`No such file or directory`) and the run aborts before any `PASS`.
+Expected: FAIL — the first `_has_token` assertion errors (`_has_token: command not found`) and, further down, `source .../lib/deps.sh` errors (`No such file or directory`). The run does not print `PASS test-deps`.
 
-- [ ] **Step 3: Create the module** — `lib/deps.sh`
+- [ ] **Step 3: Add the shared matcher to `lib/common.sh`**
+
+Append after the existing `claude_bin` line:
+
+```bash
+# _has_token <needle> — read whitespace-delimited tokens from stdin; exit 0 iff any token == needle.
+# Fixed-string + whole-token (no regex, no substring): 'x@y-official' never matches 'x@y-official-z'.
+# Empty stdin (e.g. a failed `... list || true`) -> no tokens -> exit 1.
+_has_token() {
+  local needle="$1" line tok
+  while read -r line; do
+    for tok in $line; do [ "$tok" = "$needle" ] && return 0; done
+  done
+  return 1
+}
+```
+
+- [ ] **Step 4: Create the module** — `lib/deps.sh`
 
 ```bash
 # deps.sh — flag-aware system-dependency check + offer-install (Arch/pacman).
@@ -213,6 +246,9 @@ dep_require() {
     if [ "$inpkg" -eq 0 ]; then cmds+=("$1"); else pkgs+=("$1"); fi
     shift
   done
+  if [ "${#cmds[@]}" -eq 0 ] || [ "${#pkgs[@]}" -eq 0 ]; then
+    warn "dep_require: malformed call for '$why' (expected '<check-cmd...> -- <pkg...>')"; return 0
+  fi
   local c
   for c in "${cmds[@]}"; do
     command -v "$c" >/dev/null 2>&1 || { _offer_install "$why" "${pkgs[@]}"; return 0; }
@@ -246,6 +282,11 @@ deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> — offer-install 
 
 _have_node_npx() { command -v node >/dev/null 2>&1 && command -v npx >/dev/null 2>&1; }
 
+_claude_present() {   # consistent with claude_bin: true if `claude` is on PATH OR its fallback is exec
+  command -v claude >/dev/null 2>&1 && return 0
+  local cb; cb="$(claude_bin)"; [ -x "$cb" ]
+}
+
 _rdy() {   # <label> <fix> <check-cmd...> — one non-fatal readiness line
   local label="$1" fix="$2"; shift 2
   if "$@" >/dev/null 2>&1; then log "ready: $label OK"; else warn "ready: $label MISSING -> $fix"; fi
@@ -254,20 +295,21 @@ _rdy() {   # <label> <fix> <check-cmd...> — one non-fatal readiness line
 readiness_report() {   # <ctx7> <playwright> <azure> <ado> <dotnet> — non-fatal env summary; always 0
   local ctx7="${1:-false}" pw="${2:-false}" azure="${3:-false}" ado="${4:-false}" dotnet="${5:-false}"
   local cb; cb="$(claude_bin)"
-  _rdy "claude CLI" "provision via chezmoi (or install) before plugins install" command -v claude
+  _rdy "claude CLI" "provision via chezmoi (or install) before plugins install" _claude_present
   if [ "$ctx7" = true ] || [ "$pw" = true ] || [ "$azure" = true ] || [ "$ado" = true ]; then
     _rdy "MCP runtime (node+npx)" "sudo pacman -S nodejs npm" _have_node_npx
   fi
   if [ "$pw" = true ];     then _rdy "chromium (Playwright)" "sudo pacman -S chromium" _chromium_present; fi
   if [ "$dotnet" = true ]; then _rdy "dotnet SDK" "sudo pacman -S dotnet-sdk" command -v dotnet; fi
-  if command -v claude >/dev/null 2>&1; then
-    if "$cb" plugin list 2>/dev/null | grep -qE "(^|[[:space:]])superpowers@claude-plugins-official([[:space:]]|\$)"; then
+  if _claude_present; then
+    local listing; listing="$("$cb" plugin list 2>/dev/null || true)"
+    if _has_token "superpowers@claude-plugins-official" <<<"$listing"; then
       log "ready: superpowers plugin OK"
     else
       warn "ready: superpowers plugin MISSING -> re-run ./setup.sh"
     fi
     if [ "$dotnet" = true ]; then
-      if "$cb" plugin list 2>/dev/null | grep -qE "(^|[[:space:]])dotnet@dotnet-agent-skills([[:space:]]|\$)"; then
+      if _has_token "dotnet@dotnet-agent-skills" <<<"$listing"; then
         log "ready: dotnet plugin OK"
       else
         warn "ready: dotnet plugin MISSING -> re-run ./setup.sh"
@@ -278,28 +320,29 @@ readiness_report() {   # <ctx7> <playwright> <azure> <ado> <dotnet> — non-fata
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 5: Run the test to verify it passes**
 
 Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/test-deps.sh`
-Expected: nine `ok ...` lines then `PASS test-deps` (exit 0). If any line reads `FAIL`, fix `lib/deps.sh` (not the test) and re-run.
+Expected: twelve `ok ...` lines then `PASS test-deps` (exit 0). Any `FAIL` → fix `lib/common.sh`/`lib/deps.sh` (not the test) and re-run.
 
-- [ ] **Step 5: Confirm the rest of the suite is still green**
+- [ ] **Step 6: Confirm the rest of the suite is still green**
 
 Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/run-all-tests.sh`
-Expected: `ALL TESTS PASSED`. (Adding `deps.sh` + `test-deps.sh` does not touch `setup.sh` or `plugins.sh`, so the old `test-plugins.sh` and `test-setup-idempotent.sh` still pass.)
+Expected: `ALL TESTS PASSED`. (Adding `_has_token` + `deps.sh` + `test-deps.sh` does not touch `setup.sh` or `plugins.sh`, so the old `test-plugins.sh` and `test-setup-idempotent.sh` still pass.)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 cd /home/stsiapan/dev/claudefiles
-git add lib/deps.sh skills/tools/test-deps.sh
+git add lib/common.sh lib/deps.sh skills/tools/test-deps.sh
 git commit -m "$(cat <<'EOF'
 feat(deps): flag-aware dependency check + offer-install + readiness
 
 New lib/deps.sh: dep_require/_offer_install/_pacman_install (Arch/pacman,
-every path non-fatal, array packages), _chromium_present mirroring the MCP
-resolver override, and a non-fatal readiness_report. Unit-tested on an
-isolated PATH with fake pacman/sudo (test-deps.sh).
+every path non-fatal, array packages, malformed-call guarded), _chromium_present
+mirroring the MCP resolver override, and a non-fatal readiness_report keyed on a
+claude_bin-consistent _claude_present. common.sh gains _has_token, a whole-token
+fixed-string matcher. Unit-tested on an isolated PATH with fake pacman/sudo.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -308,17 +351,20 @@ EOF
 
 ---
 
-### Task 2: `lib/plugins.sh` — superpowers always, dotnet by flag
+### Task 2: `lib/plugins.sh` — superpowers always, dotnet by flag (+ rewire `setup.sh`)
 
 **Files:**
 - Rewrite: `lib/plugins.sh`
+- Modify: `setup.sh` (ungate the plugins phase in the same commit — no transient regression)
 - Rewrite: `skills/tools/test-plugins.sh`
 
 **Interfaces:**
-- Consumes: `log`, `warn`, `claude_bin` (`lib/common.sh`).
-- Produces (used by Task 3 in `setup.sh`): `plugins_apply <dotnet_enabled:true|false>` — installs `superpowers@claude-plugins-official` always and `dotnet@dotnet-agent-skills` when the arg is `true`; idempotent; always returns 0. Internal guards `_ensure_marketplace <name> <source>` and `_ensure_plugin <plugin@marketplace>`.
+- Consumes: `log`, `warn`, `claude_bin`, `_has_token` (`lib/common.sh`).
+- Produces: `plugins_apply <dotnet_enabled:true|false>` — installs `superpowers@claude-plugins-official` always and `dotnet@dotnet-agent-skills` when the arg is `true`; idempotent; always returns 0. Internal guards `_ensure_marketplace <name> <source>` and `_ensure_plugin <plugin@marketplace>`, both deciding presence from a **captured** listing (`... || true`), so a failing `claude ... list` degrades to "absent" with no `set -e`/pipefail edge.
 
-**Spec deviation (intentional, documented):** the spec wrote `_ensure_marketplace`'s presence check as an anchored match on the marketplace **name**. The stateful test fake stores the **source** passed to `marketplace add`, and the real CLI's `marketplace list` output format is not verifiable in this environment. So `_ensure_marketplace` matches **name OR source** as fixed strings (`grep -qF -e "$1" -e "$2"`) — idempotent against the fake and robust to whichever the CLI prints. The anchored-both-sides ERE is retained for `_ensure_plugin` (the `plugin@marketplace` identifier), where finding 9's substring-collision risk is real.
+**Spec deviations (intentional, documented):**
+1. `_ensure_marketplace` matches marketplace **name OR source** as fixed strings (`grep -qF -e "$1" -e "$2"`) rather than the spec's anchored-name match — the stateful test fake stores the *source* passed to `marketplace add`, and the real CLI's `marketplace list` format is unverifiable here; matching either is idempotent against the fake and robust to whichever the CLI prints. Substring collision is not a concern for the specific `owner/repo` sources.
+2. `_ensure_plugin` uses `_has_token` (whole-token fixed match) instead of an interpolated ERE. This keeps finding-9's collision-safety (`...-official-x` is a different token) while removing regex fragility for any future plugin id containing regex metacharacters. (`-xF`/`-wF` were rejected: `-x` breaks if the CLI decorates the line; `-w` treats `-official-x` as a boundary and would false-match.)
 
 - [ ] **Step 1: Write the failing test** — rewrite `skills/tools/test-plugins.sh`
 
@@ -329,9 +375,9 @@ The current test calls `plugins_apply` with no arg and asserts the dotnet plugin
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 fails=0
-chk()    { local d="$1"; shift; if "$@"; then printf 'ok   %s\n' "$d"; else printf 'FAIL %s\n' "$d"; fails=1; fi; }
-hasln()  { grep -qF -- "$1" "$2"; }
-noln()   { ! grep -qF -- "$1" "$2"; }
+chk()   { local d="$1"; shift; if "$@"; then printf 'ok   %s\n' "$d"; else printf 'FAIL %s\n' "$d"; fails=1; fi; }
+hasln() { grep -qF -- "$1" "$2"; }
+noln()  { ! grep -qF -- "$1" "$2"; }
 
 source "$cf/skills/tools/lib/faketools.bash"
 source "$cf/lib/common.sh"; source "$cf/lib/plugins.sh"
@@ -384,26 +430,28 @@ chk "failing-list: superpowers install still attempted"   hasln "install superpo
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/test-plugins.sh`
-Expected: FAIL — the current `plugins_apply` ignores its argument, never touches `claude-plugins-official`, so `sp: marketplace added` / `sp: plugin installed` fail; the run ends `SOME test-plugins CASES FAILED` (exit 1).
+Expected: FAIL — the current `plugins_apply` ignores its argument and never touches `claude-plugins-official`, so `sp: marketplace added` / `sp: plugin installed` fail; the run ends `SOME test-plugins CASES FAILED` (exit 1).
 
 - [ ] **Step 3: Rewrite the module** — `lib/plugins.sh`
 
 ```bash
 # plugins.sh — install Claude Code plugins idempotently: superpowers ALWAYS, dotnet by flag.
-# Guards use the repo's `if ! ... | grep -q` style so `set -e` never trips; a failing
-# `claude ... list` yields empty output -> treated as "absent" -> the add/install runs,
-# and its own failure is caught by `|| warn` (never aborts the rest of setup.sh).
+# Presence is decided from a CAPTURED listing (`... || true`) rather than a pipeline, so a
+# failing `claude ... list` degrades to "" -> "absent" -> the add/install runs (its own
+# failure is caught by `|| warn`), with no `set -e`/pipefail edge. Never aborts setup.sh.
 
 _ensure_marketplace() {   # <name> <source> — add if absent. Match name OR source as fixed strings:
   local cb; cb="$(claude_bin)"     # the real CLI and our stateful test fake differ on which they print.
-  if ! "$cb" plugin marketplace list 2>/dev/null | grep -qF -e "$1" -e "$2"; then
+  local listing; listing="$("$cb" plugin marketplace list 2>/dev/null || true)"
+  if ! grep -qF -e "$1" -e "$2" <<<"$listing"; then
     log "adding marketplace $1"; "$cb" plugin marketplace add "$2" || warn "marketplace add '$1' failed"
   fi
 }
 
-_ensure_plugin() {        # <plugin@marketplace> — install if absent. Anchored BOTH sides so a
-  local cb; cb="$(claude_bin)"     # substring (e.g. '...-official-x') is not mistaken for installed.
-  if ! "$cb" plugin list 2>/dev/null | grep -qE "(^|[[:space:]])$1([[:space:]]|\$)"; then
+_ensure_plugin() {        # <plugin@marketplace> — install if absent. Whole-token match (via _has_token)
+  local cb; cb="$(claude_bin)"     # so a substring (e.g. '...-official-x') is never mistaken for installed.
+  local listing; listing="$("$cb" plugin list 2>/dev/null || true)"
+  if ! _has_token "$1" <<<"$listing"; then
     log "installing $1"; "$cb" plugin install "$1" || warn "install '$1' failed"
   fi
 }
@@ -426,19 +474,39 @@ plugins_apply() {         # <dotnet_enabled:true|false>
 Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/test-plugins.sh`
 Expected: all `ok ...` lines then `PASS test-plugins` (exit 0).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Rewire `setup.sh`'s plugins phase in the same commit**
+
+The new `plugins_apply` takes the flag as an argument; leaving the old gated call would silently stop installing dotnet. Update it now (keep the `5/7` numbering — the deps phase + renumber land in Task 3). Edit `setup.sh` — replace the line:
+
+```bash
+log "5/7 plugins";       if [ "$(config_flag dotnet_skills)" = true ]; then plugins_apply || warn "plugin install failed (rest of config still applied)"; else log "skip plugins"; fi
+```
+
+with:
+
+```bash
+log "5/7 plugins";       plugins_apply "$(config_flag dotnet_skills)" || warn "plugin install failed (rest of config still applied)"
+```
+
+- [ ] **Step 6: Run the full suite** (both plugins.sh and its setup.sh caller changed together)
+
+Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/run-all-tests.sh`
+Expected: `ALL TESTS PASSED`. `test-setup-idempotent.sh` (still seeding `dotnet_skills=true`) now drives the ungated `plugins_apply true`: first run installs superpowers + dotnet, second run installs nothing — its no-reinstall assertion holds.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 cd /home/stsiapan/dev/claudefiles
-git add lib/plugins.sh skills/tools/test-plugins.sh
+git add lib/plugins.sh setup.sh skills/tools/test-plugins.sh
 git commit -m "$(cat <<'EOF'
 feat(plugins): install superpowers always, dotnet by flag
 
-plugins_apply <dotnet_enabled> now installs superpowers@claude-plugins-official
+plugins_apply <dotnet_enabled> installs superpowers@claude-plugins-official
 unconditionally and dotnet@dotnet-agent-skills only when enabled, via factored
-idempotent _ensure_marketplace/_ensure_plugin guards. Plugin match is anchored
-both sides (no substring collision); a failing `claude ... list` degrades to
-"absent" and the add/install's own failure is a warn, not an abort.
+idempotent guards over a captured listing (failing `claude ... list` -> "absent";
+its own failure -> warn, not abort). Plugin presence uses a whole-token match
+(_has_token) — collision-safe without regex. setup.sh's plugins phase is rewired
+to pass the flag in the same commit, so no intermediate state drops the plugin.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -447,10 +515,10 @@ EOF
 
 ---
 
-### Task 3: `setup.sh` — 8 phases, deps + ungated plugins + readiness
+### Task 3: `setup.sh` — 8 phases, deps + readiness
 
 **Files:**
-- Modify: `setup.sh` (source `deps`; phase 3 `deps`; renumber `/7`→`/8`; ungate plugins; readiness in verify)
+- Modify: `setup.sh` (source `deps`; phase 3 `deps`; renumber `/7`→`/8`; `readiness_report` in verify — the plugins line is already ungated from Task 2)
 - Modify: `skills/tools/test-setup-idempotent.sh` (fake `pacman`/`sudo`; assert deps no-op on both runs)
 
 **Interfaces:**
@@ -458,7 +526,7 @@ EOF
 
 - [ ] **Step 1: Rewrite `setup.sh`** (replace the whole file)
 
-Changes vs. current: `deps` added to the source loop; phase labels `N/7` → `N/8`; new phase 3 `deps` (wired with all five flags in the spec's order `context7 playwright azure_mcp ado dotnet_skills`); plugins phase ungated — `plugins_apply "$(config_flag dotnet_skills)"` with the existing `|| warn` wrapper; `readiness_report ...` added to verify. The `config_ensure_all` block is unchanged.
+Changes vs. the Task 2 state: `deps` added to the source loop; phase labels `N/7` → `N/8`; new phase 3 `deps` (wired with all five flags in the spec order `context7 playwright azure_mcp ado dotnet_skills`); `readiness_report ...` added to verify. The plugins phase already passes the flag (Task 2).
 
 ```bash
 #!/usr/bin/env bash
@@ -511,17 +579,19 @@ readiness_report "$(config_flag context7)" "$(config_flag playwright)" "$(config
 log "Done. Restart Claude Code sessions to pick up skills and hook."
 ```
 
-- [ ] **Step 2: Extend `test-setup-idempotent.sh`** — add fake `pacman`/`sudo` and assert the deps phase mutates nothing on either run
+- [ ] **Step 2: Extend `test-setup-idempotent.sh`** — add fake `pacman`/`sudo` and assert the deps phase never shells out
 
-Insert a fake `pacman`/`sudo` into the fixture `bin` (which `setup_fixture_home` already prepends to `PATH`) right after the fixture is created, and add a post-run assertion. Replace the current file with:
+Replace the file with:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
-# fake pacman/sudo so the deps phase can never mutate the real system, and we can
-# assert it stays a no-op (all real deps are present + non-interactive never installs)
+# fake pacman/sudo so the deps phase can never mutate the real system. It stays a no-op here
+# NOT because deps happen to be installed, but because non-interactive (ASSUME_TTY=0) never
+# shells out: a missing dep just prints a manual command and continues, so pacman/sudo are
+# never invoked on either run. The empty-PACLOG assertion below encodes exactly that.
 export PACLOG="$h/pac.log"; : > "$PACLOG"
 cat > "$h/bin/pacman" <<'EOF'
 #!/usr/bin/env bash
@@ -551,8 +621,8 @@ diff "$h/first-manifest.json" "$manifest"       || { echo "FAIL manifest not ide
 # 2nd run must not re-install the plugin or re-add MCP (stateful fake reflects prior state, finding 7)
 grep -q "plugin install" "$CLAUDE_FAKE_LOG" && { echo "FAIL reinstalled plugin on 2nd run"; exit 1; }
 grep -q "mcp add-json"    "$CLAUDE_FAKE_LOG" && { echo "FAIL re-added MCP on 2nd run"; exit 1; }
-# deps phase must be a no-op: non-interactive never installs, and it must not shell out to pacman/sudo
-[ -s "$PACLOG" ] && { echo "FAIL deps phase invoked pacman/sudo"; cat "$PACLOG"; exit 1; }
+# deps phase must not shell out to pacman/sudo in no-TTY (a missing dep prints manual, never installs)
+[ -s "$PACLOG" ] && { echo "FAIL deps phase invoked pacman/sudo in no-TTY"; cat "$PACLOG"; exit 1; }
 python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$h/.claude/settings.json"
 echo "PASS test-setup-idempotent"
 ```
@@ -560,17 +630,20 @@ echo "PASS test-setup-idempotent"
 - [ ] **Step 3: Run the idempotency test**
 
 Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/test-setup-idempotent.sh`
-Expected: `PASS test-setup-idempotent` (exit 0). It exercises the 8-phase run twice and confirms no settings/manifest diff, no re-install, and an empty `PACLOG` (deps phase never shells out — all deps present, non-interactive prints manual at most).
+Expected: `PASS test-setup-idempotent` (exit 0). It runs the 8-phase setup twice and confirms no settings/manifest diff, no re-install, and an empty `PACLOG` (the deps phase never shells out under `--non-interactive`).
 
 - [ ] **Step 4: Run the full suite**
 
 Run: `bash /home/stsiapan/dev/claudefiles/skills/tools/run-all-tests.sh`
 Expected: `ALL TESTS PASSED`.
 
-- [ ] **Step 5: Smoke the readiness output** (visual sanity, interactive path)
+- [ ] **Step 5: Smoke the readiness output** (exit status decoupled from the pipe)
 
-Run: `CLAUDEFILES_ASSUME_TTY=0 bash -c 'cd /home/stsiapan/dev/claudefiles && ./setup.sh --non-interactive 2>&1 | tail -n 20'`
-Expected: phases logged `1/8`…`8/8`; the tail shows `ready: ...` lines. On this dev box (all deps present, `claude` present) every line should read `OK`; a `MISSING -> <fix>` line is acceptable if a real dependency is genuinely absent — it must never abort. Confirm exit status is 0: `echo $?` → `0`.
+Run:
+```bash
+out="$(mktemp)"; ( cd /home/stsiapan/dev/claudefiles && CLAUDEFILES_ASSUME_TTY=0 ./setup.sh --non-interactive ) >"$out" 2>&1; echo "exit: $?"; tail -n 20 "$out"; rm -f "$out"
+```
+Expected: `exit: 0`; the tail shows phases `1/8`…`8/8` and `ready: ...` lines. On this dev box (all deps present, `claude` present) every `ready:` line should read `OK`; a `MISSING -> <fix>` line is acceptable if a dependency is genuinely absent — it must never change the exit code from `0`. (No pipe feeds `echo $?`, so `exit:` is `setup.sh`'s own status.)
 
 - [ ] **Step 6: Commit**
 
@@ -578,12 +651,11 @@ Expected: phases logged `1/8`…`8/8`; the tail shows `ready: ...` lines. On thi
 cd /home/stsiapan/dev/claudefiles
 git add setup.sh skills/tools/test-setup-idempotent.sh
 git commit -m "$(cat <<'EOF'
-feat(setup): 8-phase bootstrap — deps phase, ungated plugins, readiness
+feat(setup): 8-phase bootstrap — deps phase + readiness summary
 
 Insert phase 3 `deps` (deps_apply, flag-aware offer-install), renumber to /8,
-ungate plugins (plugins_apply now installs superpowers always + dotnet by flag),
 and end verify with a non-fatal readiness_report. Idempotency test gains fake
-pacman/sudo and asserts the deps phase never shells out on a full second run.
+pacman/sudo and asserts the deps phase never shells out on a non-interactive run.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -592,7 +664,7 @@ EOF
 
 ---
 
-### Task 4: `README.md` — document the 8 phases + Dependencies
+### Task 4: `README.md` — 8 phases + a Dependencies section
 
 **Files:**
 - Modify: `README.md`
@@ -601,7 +673,7 @@ EOF
 
 Replace the heading `## Что делает `setup.sh` (7 фаз)` with `## Что делает `setup.sh` (8 фаз)`.
 
-Then replace the numbered list (current items 1–7, `README.md:9-15`) with this eight-item list — a new **deps** item inserted at position 3, `plugins` reworded, all renumbered:
+Then replace the numbered list (current items 1–7, `README.md:9-15`) with this eight-item list — a new **deps** item at position 3, `plugins` reworded, all renumbered:
 
 ```markdown
 1. **preflight** — проверка git/python3; про `claude` предупреждает, но не падает.
@@ -614,9 +686,27 @@ Then replace the numbered list (current items 1–7, `README.md:9-15`) with this
 8. **verify** — валидирует `settings.json`, самотест каталога и печатает readiness-сводку (`claude`, node+npx, chromium, dotnet, оба плагина) — не фатально.
 ```
 
-- [ ] **Step 2: Correct the direct-install note about superpowers**
+- [ ] **Step 2: Add a dedicated Dependencies section**
 
-In the "Напрямую (разработка)" section, `plugins_apply` now installs superpowers, so the manual step is obsolete. Replace the paragraph at `README.md:35`:
+Insert this section immediately after the line `` `setup.sh` запущенный дважды не даёт diff и выходит 0. `` (`README.md:17`) and before `## Установка`:
+
+```markdown
+## Системные зависимости
+
+Фаза **deps** (Arch-only) проверяет только то, что нужно под включённые флаги, и предлагает поставить недостающее через `pacman` (`y/N` → `sudo pacman -S --needed`; под root — напрямую). Любая ветка не фатальна: нет TTY / `pacman` / `sudo` — печатает ручную команду и продолжает.
+
+| Зависимость | Пакет | Нужна для | Флаг |
+|-------------|-------|-----------|------|
+| `node` + `npx` | `nodejs npm` | запуск любого MCP-сервера (все на `npx`) | любой из `context7`/`playwright`/`azure_mcp`/`ado` |
+| `chromium` | `chromium` | браузер Playwright MCP | `playwright` |
+| `.NET SDK` (`dotnet`) | `dotnet-sdk` | C# language server / dotnet-плагин | `dotnet_skills` |
+
+`claude` CLI фаза не ставит — это задача chezmoi-бутстрапа; preflight предупреждает, а readiness в конце сообщает статус. Проверка `chromium` зеркалит резолвер `build_servers.py` (учитывает override `playwright.chromium_path`). Не-Arch (нет `pacman`) — печатается ручная команда, прогон не падает.
+```
+
+- [ ] **Step 3: Correct the direct-install note about superpowers**
+
+`plugins_apply` now installs superpowers, so the manual step is obsolete. Replace the paragraph at `README.md:35`:
 
 ```markdown
 Требуется: git, bash, GNU coreutils/awk, python3 (только stdlib). Плагин `superpowers@claude-plugins-official` ставится внутри Claude Code (`/plugin install superpowers@claude-plugins-official`) — процессный каркас, в чьи этапы встраивается dotnet-router.
@@ -625,12 +715,12 @@ In the "Напрямую (разработка)" section, `plugins_apply` now in
 with:
 
 ```markdown
-Требуется: git, bash, GNU coreutils/awk, python3 (только stdlib). Системные зависимости (`node`/`npx`, `chromium`, `.NET SDK`) фаза **deps** предложит поставить через `pacman` — только под нужные включённые флаги. Оба плагина ставит сам `setup.sh`: `superpowers@claude-plugins-official` (всегда) — процессный каркас, в чьи этапы встраивается dotnet-router — и `dotnet@dotnet-agent-skills` при `dotnet_skills=true`.
+Требуется: git, bash, GNU coreutils/awk, python3 (только stdlib). Системные зависимости (`node`/`npx`, `chromium`, `.NET SDK`) фаза **deps** предложит поставить через `pacman` — только под нужные включённые флаги (см. «Системные зависимости»). Оба плагина ставит сам `setup.sh`: `superpowers@claude-plugins-official` (всегда) — процессный каркас, в чьи этапы встраивается dotnet-router — и `dotnet@dotnet-agent-skills` при `dotnet_skills=true`.
 ```
 
-- [ ] **Step 3: Update the layout comment**
+- [ ] **Step 4: Update the layout comment**
 
-In the "Раскладка" code block, update the `setup.sh` and `lib/*.sh` comment lines (`README.md:60-61`) to mention 8 phases and the new module:
+In the "Раскладка" code block, update the `setup.sh` and `lib/*.sh` comment lines (`README.md:60-61`):
 
 Replace:
 ```
@@ -643,18 +733,18 @@ setup.sh                      # оркестратор (8 фаз)
 lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, common, apply-if-changed
 ```
 
-- [ ] **Step 4: Verify the README renders and is internally consistent**
+- [ ] **Step 5: Verify the README is internally consistent**
 
-Run: `grep -n "8 фаз" /home/stsiapan/dev/claudefiles/README.md && grep -n "deps" /home/stsiapan/dev/claudefiles/README.md`
-Expected: the heading and layout both say `8 фаз`; the deps phase and module both appear. No leftover `7 фаз` / `/plugin install superpowers` manual instruction: `grep -n "7 фаз\|/plugin install superpowers" /home/stsiapan/dev/claudefiles/README.md` should print nothing.
+Run: `grep -n "8 фаз\|Системные зависимости\|deps" /home/stsiapan/dev/claudefiles/README.md; echo "--- stale check (want no output) ---"; grep -n "7 фаз\|/plugin install superpowers" /home/stsiapan/dev/claudefiles/README.md`
+Expected: the first grep shows the heading, the new section, the deps phase and module; the stale check prints nothing.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd /home/stsiapan/dev/claudefiles
 git add README.md
 git commit -m "$(cat <<'EOF'
-docs: README — 8 phases, deps phase, both plugins installed by setup.sh
+docs: README — 8 phases, Dependencies section, both plugins by setup.sh
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -670,19 +760,32 @@ EOF
 | Spec section | Task |
 |--------------|------|
 | §4 8-phase architecture, renumber `/8` | Task 3 |
-| §5.1 `lib/deps.sh` (`_pacman_install`, `_offer_install`, `dep_require`, `_chromium_present`, `deps_apply`) | Task 1 |
+| §5.1 `lib/deps.sh` helpers + `deps_apply` | Task 1 |
 | §5.1 `setup.sh` deps wiring (five flags, spec order) | Task 3 |
-| §5.2 `lib/plugins.sh` (`_ensure_marketplace`, `_ensure_plugin`, `plugins_apply <flag>`) + `setup.sh` `|| warn` wrapper | Task 2 (module) + Task 3 (wiring) |
+| §5.2 `lib/plugins.sh` + `setup.sh` ungate/`|| warn` | Task 2 (module + setup rewire) |
 | §5.3 readiness summary (claude, node+npx, chromium, dotnet, both plugins) | `readiness_report` in Task 1, called in Task 3 |
-| §7 error handling (non-fatal everywhere, non-interactive prints manual) | Tasks 1 & 3 code + Task 1 cases D/E and Task 3 `PACLOG`-empty assert |
-| §8 testing: `test-deps.sh` (new), `test-plugins.sh` (extend), `test-setup-idempotent.sh` (extend), `run-all-tests.sh` glob | Tasks 1, 2, 3 |
-| §9 touched files incl. README; settings.template unchanged | Task 4; template left untouched everywhere |
-| §8 finding-specific cases 1/2/3/4/6/9/11 | Task 1 cases B/E/C/F/(C via ASSUME_TTY=1)/, Task 2 collision + failing-list cases |
+| §7 error handling (non-fatal everywhere; non-interactive prints manual) | Tasks 1 & 3 code + Task 1 cases D/E + Task 3 empty-`PACLOG` assert |
+| §8 testing: `test-deps.sh` (new), `test-plugins.sh` / `test-setup-idempotent.sh` (extend), `run-all-tests.sh` glob | Tasks 1, 2, 3 |
+| §8 finding-specific cases 1/2/3/4/6/9/11 | Task 1 B/E/C/F/(C via ASSUME_TTY=1)/, Task 2 collision + failing-list |
+| §9 touched files incl. README; settings.template unchanged | Task 4; template untouched |
 
 No spec requirement is left without a task.
 
 **2. Placeholder scan** — no `TBD`/`TODO`/"add error handling"/"similar to Task N". Every code and test step contains complete, runnable content; every run step states the exact command and expected output.
 
-**3. Type/name consistency** — signatures are stable across tasks: `deps_apply`/`readiness_report` take the same five ordered flags in Task 1 and Task 3; `plugins_apply <dotnet_enabled>` is defined in Task 2 and called with `"$(config_flag dotnet_skills)"` in Task 3; `_chromium_present` / `_have_node_npx` are defined once in `deps.sh` and reused by `readiness_report`; the fake-tool globals (`CLAUDE_FAKE_LOG`, `CLAUDE_FAKE_STATE`, `fake_claude_calls`) match `skills/tools/lib/faketools.bash`; `PACLOG` is the one log name across `test-deps.sh` and `test-setup-idempotent.sh`.
+**3. Type/name consistency** — `deps_apply`/`readiness_report` take the same five ordered flags in Task 1 and Task 3; `plugins_apply <dotnet_enabled>` defined in Task 2, called with `"$(config_flag dotnet_skills)"` in Task 2's setup rewire and Task 3's full file; `_has_token` defined once in `common.sh` and used by `_ensure_plugin` (Task 2) and `readiness_report` (Task 1); `_claude_present`/`_have_node_npx`/`_chromium_present`/`_rdy` defined once in `deps.sh`; fake-tool globals (`CLAUDE_FAKE_LOG`, `CLAUDE_FAKE_STATE`, `fake_claude_calls`) match `skills/tools/lib/faketools.bash`; `PACLOG` is the one log name across `test-deps.sh` and `test-setup-idempotent.sh`.
 
-**Noted deviation from spec** (Task 2): `_ensure_marketplace` matches marketplace name-OR-source as fixed strings instead of the spec's anchored-name match — required for determinism against the stateful test fake (which stores the source) and robustness to the CLI's unverified `marketplace list` format; the anchored-both-sides match is kept where it matters (the `plugin@marketplace` identifier, finding 9).
+## Review refinements (Rev. 2, from Codex review of the plan, 2026-07-06)
+
+Verified against the actual repo, then incorporated:
+
+- **P0** — Task 2 no longer ships a transient plugins regression: `setup.sh`'s plugins invocation is rewired in the *same commit* as the signature change (Task 2 Step 5).
+- **P0** — Task 3's no-TTY idempotency rationale corrected: the empty-`PACLOG` invariant is "non-interactive never shells out", not "deps happen to be present".
+- **P1** — plugin guards decide presence from a captured listing (`... || true`), removing the pipefail edge; `_ensure_plugin` uses the whole-token `_has_token` (collision-safe, no regex fragility).
+- **P1** — readiness uses `_claude_present` (consistent with `claude_bin`'s fallback), not a bare `command -v claude`.
+- **P1** — `test-deps.sh` case E is root-safe (asserts the direct-`pacman` branch when `id -u = 0`).
+- **P2** — `dep_require` validates its `--`-delimited call; README gains a real Dependencies section; the smoke check reads `setup.sh`'s own exit status (no masking pipe).
+
+**Pushed back (not changed):**
+- **P2 — commit trailer.** The `Co-Authored-By: Claude Opus 4.8 ...` trailer is a hard session/harness requirement and the repo's existing commits already carry it (`git log`). It stays; the reviewer simply lacked that context.
+- **P1 `-xF`/`-wF` for the plugin match** was considered and rejected in favor of `_has_token`: `-x` (whole line) breaks if the CLI decorates the listing line; `-w` treats `-official-x` as a word boundary and would false-match the collision. A whole-*token* fixed match satisfies both the collision-safety (finding 9) and the metachar-safety the reviewer wanted.
