@@ -16,6 +16,14 @@ for t in "$here"/test-*.sh; do
   echo
 done
 
+for t in "$here"/smoke-*.sh; do
+  [ -e "$t" ] || continue
+  name="$(basename "$t")"
+  echo "=== $name ==="
+  bash "$t" || { echo "FAIL: $name (exit $?)"; fail=1; }
+  echo
+done
+
 if [ "$fail" -eq 0 ]; then
   echo "ALL TESTS PASSED"
 else
