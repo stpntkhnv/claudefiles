@@ -1,10 +1,17 @@
 # skills.sh — install personal skills into ~/.claude/skills.
-skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false>
-  local root="$1" dotnet="${2:-false}" dst="$HOME/.claude/skills"
+skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_review:true|false>
+  local root="$1" dotnet="${2:-false}" codex_review="${3:-false}" dst="$HOME/.claude/skills"
   mkdir -p "$dst"
   # context7-mcp: real dir (copy) — always
   mkdir -p "$dst/context7-mcp"
   cp "$root/claude/skills/context7-mcp/SKILL.md" "$dst/context7-mcp/SKILL.md"
+  # codex-review: copy by flag; remove when disabled (leave no trace)
+  if [ "$codex_review" = true ]; then
+    mkdir -p "$dst/codex-review"
+    cp "$root/claude/skills/codex-review/SKILL.md" "$dst/codex-review/SKILL.md"
+  else
+    rm -rf "$dst/codex-review"
+  fi
   if [ "$dotnet" != true ]; then
     log "skills installed (context7-mcp); dotnet-router skipped (dotnet disabled)"
     return 0
