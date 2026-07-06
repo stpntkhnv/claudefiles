@@ -64,8 +64,8 @@ _chromium_present() {  # honors the same playwright.chromium_path override as bu
   return 1
 }
 
-deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> — offer-install each needed dep; always 0
-  local ctx7="${1:-false}" pw="${2:-false}" azure="${3:-false}" ado="${4:-false}" dotnet="${5:-false}"
+deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> — offer-install each needed dep; always 0
+  local ctx7="${1:-false}" pw="${2:-false}" azure="${3:-false}" ado="${4:-false}" dotnet="${5:-false}" codex="${6:-false}"
   if [ "$ctx7" = true ] || [ "$pw" = true ] || [ "$azure" = true ] || [ "$ado" = true ]; then
     dep_require "MCP servers (npx-based)" node npx -- nodejs npm
   fi
@@ -75,10 +75,26 @@ deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> — offer-install 
   if [ "$dotnet" = true ]; then
     dep_require "C# language server / dotnet plugin" dotnet -- dotnet-sdk
   fi
+  if [ "$codex" = true ]; then
+    dep_require "Codex CLI runtime (node/npx)" node npx -- nodejs npm
+    _codex_ok || warn "codex CLI missing or < 0.142.5 — install/upgrade: npm install -g @openai/codex"
+  fi
   return 0     # explicit — a disabled feature must not make this non-zero under set -e (finding 1)
 }
 
 _have_node_npx() { command -v node >/dev/null 2>&1 && command -v npx >/dev/null 2>&1; }
+
+_codex_ok() {   # codex present, runnable, and version >= 0.142.5 (min contract floor)
+  command -v codex >/dev/null 2>&1 || return 1
+  local v; v="$(codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  [ -n "$v" ] || return 1
+  [ "$(printf '%s\n%s\n' "0.142.5" "$v" | sort -V | head -1)" = "0.142.5" ]
+}
+
+_codex_authed() {   # exit 0 iff codex reports a logged-in session (local, fast; more robust than doctor --json)
+  command -v codex >/dev/null 2>&1 || return 1
+  timeout 10 codex login status >/dev/null 2>&1
+}
 
 _claude_present() {   # consistent with claude_bin: true if `claude` is on PATH OR its fallback is exec
   command -v claude >/dev/null 2>&1 && return 0
@@ -91,8 +107,8 @@ _rdy() {   # <label> <fix> <check-cmd...> — one non-fatal readiness line
   return 0
 }
 
-readiness_report() {   # <ctx7> <playwright> <azure> <ado> <dotnet> — non-fatal env summary; always 0
-  local ctx7="${1:-false}" pw="${2:-false}" azure="${3:-false}" ado="${4:-false}" dotnet="${5:-false}"
+readiness_report() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> — non-fatal env summary; always 0
+  local ctx7="${1:-false}" pw="${2:-false}" azure="${3:-false}" ado="${4:-false}" dotnet="${5:-false}" codex="${6:-false}"
   local cb; cb="$(claude_bin)"
   _rdy "claude CLI" "provision via chezmoi (or install) before plugins install" _claude_present
   if [ "$ctx7" = true ] || [ "$pw" = true ] || [ "$azure" = true ] || [ "$ado" = true ]; then
@@ -114,6 +130,10 @@ readiness_report() {   # <ctx7> <playwright> <azure> <ado> <dotnet> — non-fata
         warn "ready: dotnet plugin MISSING -> re-run ./setup.sh"
       fi
     fi
+  fi
+  if [ "$codex" = true ]; then
+    _rdy "codex CLI (>=0.142.5)" "npm install -g @openai/codex" _codex_ok
+    _rdy "codex auth"            "run: codex login"             _codex_authed
   fi
   return 0
 }
