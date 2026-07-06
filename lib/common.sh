@@ -9,9 +9,11 @@ claude_bin() { command -v claude 2>/dev/null || echo "$HOME/.npm-global/bin/clau
 # Fixed-string + whole-token (no regex, no substring): 'x@y-official' never matches 'x@y-official-z'.
 # Empty stdin (e.g. a failed `... list || true`) -> no tokens -> exit 1.
 _has_token() {
-  local needle="$1" line tok
+  local needle="$1" line
+  local -a toks
   while read -r line; do
-    for tok in $line; do [ "$tok" = "$needle" ] && return 0; done
+    read -ra toks <<<"$line"
+    for tok in "${toks[@]}"; do [ "$tok" = "$needle" ] && return 0; done
   done
   return 1
 }

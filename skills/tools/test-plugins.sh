@@ -28,6 +28,7 @@ chk "dotnet on: dotnet installed" hasln "plugin install dotnet@dotnet-agent-skil
 : > "$CLAUDE_FAKE_LOG"
 plugins_apply true
 chk "rerun: no plugin install"    noln "plugin install" "$L"
+chk "rerun: no marketplace add"   noln "plugin marketplace add" "$L"
 
 # --- substring collision must NOT count as installed (finding 9) ---
 setup_fixture_home >/dev/null; L="$(fake_claude_calls)"
