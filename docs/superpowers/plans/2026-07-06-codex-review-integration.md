@@ -12,7 +12,7 @@
 
 - **Never modify superpowers files.** Integration is a layer only (skill + CLAUDE.md nudge + config).
 - **Idempotent:** `setup.sh` run twice produces zero diff and exits 0.
-- **Flag-gated:** `flags.codex_review` gates the whole feature; `flags.codex_plugin` (default off) gates the optional OpenAI plugin. A disabled feature leaves no trace in `~/.claude`.
+- **Flag-gated, with a hard gate:** `flags.codex_review` gates the whole feature. The optional plugin's effective state is `codex_plugin_enabled = codex_review AND codex_plugin` — the plugin can never be on while the feature is off. A disabled feature **actively removes** its traces (skill dir, CLAUDE.md block, settings keys), not just "doesn't add" them.
 - **Public repo, no secrets in git.** Codex auth lives in `~/.codex/auth.json` (managed by `codex login`), never by claudefiles.
 - **Codex min version:** `0.142.5` (contract floor for `codex review` + batch flags).
 - **Model pinned inline, every call:** `-c model="gpt-5.5" -c model_reasoning_effort="high"`. Never write `~/.codex/config.toml` (inline `-c` avoids the [config-effort-ignored bug](https://github.com/openai/codex/issues/28113) and side-effects on the user's normal sessions).
@@ -22,15 +22,84 @@
 
 ---
 
-### Task 1: `codex-review` skill + `skills_apply` delivery
+### Task 1: CLI contract smoke (front-loaded verification)
+
+Verify the real `codex` CLI exposes the surface everything else depends on **before** building on it.
+Self-skips when codex is absent, so it is safe in the suite and on CI.
+
+**Files:**
+- Create: `skills/tools/smoke-codex-review.sh`
+- Modify: `skills/tools/run-all-tests.sh` (also run `smoke-*.sh`, self-skipping)
+
+**Interfaces:**
+- Consumes: a real `codex` on PATH (self-skips otherwise). Asserts CLI contract only — no network model-run.
+
+- [ ] **Step 1: Write the smoke test**
+
+Create `skills/tools/smoke-codex-review.sh`:
+
+```bash
+#!/usr/bin/env bash
+# smoke-codex-review.sh — assert the REAL codex CLI still exposes the surface codex-review
+# depends on. Contract only: help/version/login/doctor-parse. No network model-run. Self-skips
+# when codex is absent, so it is safe inside run-all-tests.sh.
+set -uo pipefail
+if ! command -v codex >/dev/null 2>&1 || ! codex --version >/dev/null 2>&1; then
+  echo "SKIP smoke-codex-review (no runnable codex)"; exit 0
+fi
+fails=0
+chk() { local d="$1"; shift; if "$@"; then printf 'ok   %s\n' "$d"; else printf 'FAIL %s\n' "$d"; fails=1; fi; }
+v="$(codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+chk "codex >= 0.142.5 (got ${v:-none})" bash -c '[ "$(printf "0.142.5\n%s\n" "'"$v"'" | sort -V | head -1)" = "0.142.5" ]'
+chk "codex exec exposes --ephemeral"              bash -c 'codex exec   --help 2>&1 | grep -q -- --ephemeral'
+chk "codex exec exposes --skip-git-repo-check"    bash -c 'codex exec   --help 2>&1 | grep -q -- --skip-git-repo-check'
+chk "codex exec exposes -o/--output-last-message" bash -c 'codex exec   --help 2>&1 | grep -q -- --output-last-message'
+chk "codex exec exposes --cd"                     bash -c 'codex exec   --help 2>&1 | grep -q -- --cd || codex --help 2>&1 | grep -q -- --cd'
+chk "codex review exposes --base"                 bash -c 'codex review --help 2>&1 | grep -q -- --base'
+chk "codex login has a status subcommand"         bash -c 'codex login  --help 2>&1 | grep -qw status'
+chk "codex doctor --json parses"                  bash -c 'timeout 20 codex doctor --json 2>/dev/null | python3 -c "import json,sys; json.load(sys.stdin)"'
+[ "$fails" -eq 0 ] && echo "PASS smoke-codex-review" || { echo "SMOKE FAILED — codex CLI surface drifted"; exit 1; }
+```
+
+- [ ] **Step 2: Make `run-all-tests.sh` also run smoke scripts**
+
+In `skills/tools/run-all-tests.sh`, after the `test-*.sh` loop (line 17), add a second loop:
+
+```bash
+for t in "$here"/smoke-*.sh; do
+  [ -e "$t" ] || continue
+  name="$(basename "$t")"
+  echo "=== $name ==="
+  bash "$t" || { echo "FAIL: $name (exit $?)"; fail=1; }
+  echo
+done
+```
+
+- [ ] **Step 3: Run it**
+
+```bash
+bash skills/tools/smoke-codex-review.sh
+```
+Expected on this dev box (codex present, unauthenticated): all contract checks PASS (they need no auth) → `PASS smoke-codex-review`. On a box without codex: `SKIP`. **If any contract check FAILS, stop — the plan's command shapes are built on a drifted CLI and must be revisited before continuing.**
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add skills/tools/smoke-codex-review.sh skills/tools/run-all-tests.sh
+git commit -m "test(codex-review): front-loaded codex CLI contract smoke"
+```
+
+---
+
+### Task 2: `codex-review` skill + `skills_apply` delivery
 
 **Files:**
 - Create: `claude/skills/codex-review/SKILL.md`
-- Modify: `lib/skills.sh` (add trailing `codex_review` arg + copy)
+- Modify: `lib/skills.sh` (trailing `codex_review` arg: copy when true, remove when false)
 - Test: `skills/tools/test-skills.sh` (extend)
 
 **Interfaces:**
-- Produces: `skills_apply <repo_root> <dotnet:true|false> <codex_review:true|false>` — trailing arg is optional (`${3:-false}`), so existing 2-arg callers keep working until Task 5 wires the real value.
+- Produces: `skills_apply <repo_root> <dotnet:true|false> <codex_review:true|false>` — trailing arg optional (`${3:-false}`); `true` copies the skill, `false` removes any previously-copied skill dir. Existing 2-arg callers keep working (removal on default-false is a no-op on a fresh home).
 
 - [ ] **Step 1: Write the skill body**
 
@@ -63,8 +132,6 @@ Run at these three superpowers checkpoints:
 3. **At requesting-code-review** — on the task's diff (you already have `BASE_SHA`/`HEAD_SHA`).
 
 ## Precondition: is Codex runnable?
-
-Before reviewing, confirm the binary runs:
 
 ```bash
 command -v codex >/dev/null 2>&1 && codex --version >/dev/null 2>&1 && echo CODEX_RUNNABLE || echo CODEX_UNAVAILABLE
@@ -117,13 +184,17 @@ timeout 900 codex review \
   "Focus on correctness, security, and whether the change matches its stated intent."
 ```
 
-If `codex review` is unavailable on the machine, fall back to a diff piped through `codex exec`:
+If `codex review` is unavailable on the machine, fall back to a diff piped through `codex exec`.
+Pass the instruction as the prompt **argument** and let the piped diff land in the `<stdin>`
+block — do NOT also pass `-` (that would make stdin the whole prompt and drop the instruction):
 
 ```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+BASE_SHA="$(git rev-parse HEAD~1)"
 git diff "$BASE_SHA"...HEAD | timeout 900 codex exec \
-  --sandbox read-only --skip-git-repo-check --ephemeral \
-  -c model="gpt-5.5" -c model_reasoning_effort="high" - \
-  "Review this diff for correctness, security, and intent. End with VERDICT: SOLID | REVISE."
+  --cd "$REPO_ROOT" --sandbox read-only --skip-git-repo-check --ephemeral \
+  -c model="gpt-5.5" -c model_reasoning_effort="high" \
+  "Review the diff in the <stdin> block for correctness, security, and intent. End with VERDICT: SOLID | REVISE."
 ```
 
 ## Triage the findings (single pass)
@@ -139,9 +210,9 @@ Present a short consolidated summary: which findings you accepted (and the chang
 you rejected (and why), and Codex's VERDICT — then let the user decide.
 ````
 
-- [ ] **Step 2: Wire `skills_apply` to copy it (trailing optional arg)**
+- [ ] **Step 2: Wire `skills_apply` — copy on true, remove on false**
 
-In `lib/skills.sh`, change the signature line and add the copy after the context7-mcp copy. Current (`lib/skills.sh:3-12`):
+In `lib/skills.sh`, change the signature (line 3) and add the copy/remove after the context7-mcp copy (line 7). Current lines 3-7:
 
 ```bash
 skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false>
@@ -161,10 +232,12 @@ skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_r
   # context7-mcp: real dir (copy) — always
   mkdir -p "$dst/context7-mcp"
   cp "$root/claude/skills/context7-mcp/SKILL.md" "$dst/context7-mcp/SKILL.md"
-  # codex-review: real dir (copy) — by flag
+  # codex-review: copy by flag; remove when disabled (leave no trace)
   if [ "$codex_review" = true ]; then
     mkdir -p "$dst/codex-review"
     cp "$root/claude/skills/codex-review/SKILL.md" "$dst/codex-review/SKILL.md"
+  else
+    rm -rf "$dst/codex-review"
   fi
 ```
 
@@ -173,8 +246,8 @@ skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_r
 `skills/tools/test-skills.sh` is `set -euo pipefail` hard-exit style using `faketools.bash`'s
 `setup_fixture_home`. Its dotnet cases are guarded by a clone-present SKIP at line 9. The
 codex-review copy needs no clone, so insert these cases **right after `source …/skills.sh`
-(line 5), before that skip guard**, mirroring the file's existing `[ … ] || { echo FAIL; exit 1; }`
-and `[ … ] && { echo FAIL; exit 1; }` idioms:
+(line 5), before that skip guard**, mirroring the file's `[ … ] || { echo FAIL; exit 1; }` and
+`[ … ] && { echo FAIL; exit 1; }` idioms:
 
 ```bash
 # codex-review skill: copied only when the 3rd arg (codex_review) is true
@@ -184,6 +257,12 @@ skills_apply "$cf" false true
 setup_fixture_home >/dev/null; hc2="$HOME"
 skills_apply "$cf" false false
 [ -e "$hc2/.claude/skills/codex-review/SKILL.md" ] && { echo FAIL codex-review-should-be-absent; exit 1; }
+# toggle on -> off removes the skill dir (leave no trace) — the P1a gap
+setup_fixture_home >/dev/null; ht="$HOME"
+skills_apply "$cf" false true
+[ -f "$ht/.claude/skills/codex-review/SKILL.md" ] || { echo FAIL toggle-on; exit 1; }
+skills_apply "$cf" false false
+[ -e "$ht/.claude/skills/codex-review" ] && { echo FAIL toggle-off-not-removed; exit 1; }
 # backward compat: 2-arg legacy call still copies context7
 setup_fixture_home >/dev/null; hc3="$HOME"
 skills_apply "$cf" false
@@ -195,25 +274,25 @@ skills_apply "$cf" false
 ```bash
 bash skills/tools/test-skills.sh
 ```
-Expected: FAIL before Step 2's edit (skill not copied), PASS after.
+Expected: FAIL before Step 2's edit (skill not copied / not removed on toggle), PASS after.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add claude/skills/codex-review/SKILL.md lib/skills.sh skills/tools/test-skills.sh
-git commit -m "feat(codex-review): skill brain + flag-gated skills_apply delivery"
+git commit -m "feat(codex-review): skill brain + flag-gated skills_apply (copy/remove)"
 ```
 
 ---
 
-### Task 2: `lib/claudemd.sh` — managed CLAUDE.md nudge block
+### Task 3: `lib/claudemd.sh` — managed CLAUDE.md nudge block
 
 **Files:**
 - Create: `lib/claudemd.sh`
 - Test: `skills/tools/test-claudemd.sh`
 
 **Interfaces:**
-- Produces: `claudemd_apply <enabled:true|false>` — writes/removes a marker-delimited block in `${CLAUDEFILES_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}`. Idempotent; preserves all non-managed content. The `CLAUDEFILES_CLAUDE_MD` override exists for tests.
+- Produces: `claudemd_apply <enabled:true|false>` — writes/removes a marker-delimited block in `${CLAUDEFILES_CLAUDE_MD:-$HOME/.claude/CLAUDE.md}`. Idempotent; preserves all non-managed content. `CLAUDEFILES_CLAUDE_MD` override exists for tests.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -262,16 +341,26 @@ chk "disable on missing file -> no file" [ ! -e "$CLAUDEFILES_CLAUDE_MD" ]
 [ "$fails" -eq 0 ] && echo "PASS test-claudemd" || { echo "SOME test-claudemd CASES FAILED"; exit 1; }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Create a stub and run — verify a meaningful red**
+
+Create `lib/claudemd.sh` as a no-op stub first, so the red test fails on an **assertion**
+(block not written) rather than a `source`-not-found error (cleaner TDD signal — the P3 note):
+
+```bash
+# claudemd.sh — own a marker-delimited block in ~/.claude/CLAUDE.md (stub; implemented next step).
+claudemd_apply() { :; }
+```
+
+Run:
 
 ```bash
 bash skills/tools/test-claudemd.sh
 ```
-Expected: FAIL — `lib/claudemd.sh` does not exist yet (source error).
+Expected: FAIL on case A ("enable creates file"/"enable writes block") — the stub does nothing.
 
 - [ ] **Step 3: Implement `lib/claudemd.sh`**
 
-Create `lib/claudemd.sh`:
+Replace the stub with the full implementation:
 
 ```bash
 # claudemd.sh — own a marker-delimited block in ~/.claude/CLAUDE.md, preserve the rest.
@@ -326,15 +415,15 @@ git commit -m "feat(codex-review): idempotent ~/.claude/CLAUDE.md nudge block"
 
 ---
 
-### Task 3: deps + readiness Codex checks
+### Task 4: deps + readiness Codex checks
 
 **Files:**
 - Modify: `lib/deps.sh` (`deps_apply` + `readiness_report` trailing `codex` arg; add `_codex_ok`, `_codex_authed`)
 - Test: `skills/tools/test-deps.sh` (extend REAL coreutils list, add `fake_codex`, add cases)
 
 **Interfaces:**
-- Consumes: `_offer_install`, `dep_require`, `_rdy`, `_have_node_npx` (existing in `lib/deps.sh`).
-- Produces: `deps_apply <ctx7> <pw> <azure> <ado> <dotnet> <codex>`; `readiness_report <ctx7> <pw> <azure> <ado> <dotnet> <codex>`. Both trailing args optional (`${6:-false}`). `_codex_ok` (present + runnable + ≥0.142.5), `_codex_authed` (doctor json auth ok).
+- Consumes: `_offer_install`, `dep_require`, `_rdy`, `_have_node_npx` (existing).
+- Produces: `deps_apply <ctx7> <pw> <azure> <ado> <dotnet> <codex>`; `readiness_report <ctx7> <pw> <azure> <ado> <dotnet> <codex>` (trailing arg optional, `${6:-false}`). `_codex_ok` (present + runnable + ≥0.142.5); `_codex_authed` (`codex login status` exits 0).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -344,15 +433,16 @@ In `skills/tools/test-deps.sh`: (a) extend the REAL coreutils resolved at top (l
 for c in bash env python3 id mktemp mkdir grep chmod cat rm ln dirname sort timeout head; do REAL[$c]="$(command -v "$c")"; done
 ```
 
-(b) add a `fake_codex` helper next to `fake_claude` (after line 54):
+(b) add a `fake_codex` helper next to `fake_claude` (after line 54). Build-time `$1`/`$2` bake the
+version and auth state; runtime `\$1`/`\$2` dispatch:
 
 ```bash
-fake_codex(){   # $1 = version (e.g. 0.142.5); $2 = auth status: ok|fail
+fake_codex(){   # $1 = version (e.g. 0.142.5); $2 = auth: ok|fail
 cat > "$BIN/codex" <<SCRIPT
 #!/usr/bin/env bash
 case "\$1" in
   --version) echo "codex-cli $1" ;;
-  doctor)    echo '{"overallStatus":"ok","checks":{"auth.login":{"id":"auth.login","category":"auth","status":"$2"}}}' ;;
+  login)     [ "\$2" = status ] && { [ "$2" = ok ] && exit 0 || { echo "Not logged in"; exit 1; }; } ;;
   *)         exit 0 ;;
 esac
 SCRIPT
@@ -369,13 +459,20 @@ out="$SB/codex-missing.out"
 readiness_report false false false false false true >"$out" 2>&1
 chk "codex absent -> readiness MISSING" grep -q "ready: codex CLI .* MISSING" "$out"
 
-# K: codex present + new enough + authed -> readiness OK on both lines
+# K: codex present + new enough + logged in -> both readiness lines OK
 mk_sandbox; fake_claude "superpowers@claude-plugins-official"; fake_codex "0.142.5" "ok"
 load
 out="$SB/codex-ok.out"
 readiness_report false false false false false true >"$out" 2>&1
 chk "codex runnable+new -> CLI OK" grep -q "ready: codex CLI .* OK" "$out"
-chk "codex authed -> auth OK"      grep -q "ready: codex auth OK" "$out"
+chk "codex logged in -> auth OK"   grep -q "ready: codex auth OK" "$out"
+
+# K2: codex present but NOT logged in -> auth MISSING (login status exits 1)
+mk_sandbox; fake_claude "superpowers@claude-plugins-official"; fake_codex "0.142.5" "fail"
+load
+out="$SB/codex-noauth.out"
+readiness_report false false false false false true >"$out" 2>&1
+chk "codex not logged in -> auth MISSING" grep -q "ready: codex auth MISSING" "$out"
 
 # L: codex too old -> CLI MISSING (version floor enforced)
 mk_sandbox; fake_claude "superpowers@claude-plugins-official"; fake_codex "0.100.0" "ok"
@@ -397,7 +494,7 @@ chk "codex flag off -> no codex line" bash -c '! grep -q "codex" "'"$out"'"'
 ```bash
 bash skills/tools/test-deps.sh
 ```
-Expected: FAIL on the new J/K/L cases (`readiness_report` ignores a 6th arg; no codex line emitted).
+Expected: FAIL on the new J/K/K2/L cases (`readiness_report` ignores a 6th arg; no codex line emitted).
 
 - [ ] **Step 3: Implement the deps/readiness changes**
 
@@ -411,19 +508,13 @@ _codex_ok() {   # codex present, runnable, and version >= 0.142.5 (min contract 
   [ "$(printf '%s\n%s\n' "0.142.5" "$v" | sort -V | head -1)" = "0.142.5" ]
 }
 
-_codex_authed() {   # codex doctor --json reports every auth-category check as ok
+_codex_authed() {   # exit 0 iff codex reports a logged-in session (local, fast; more robust than doctor --json)
   command -v codex >/dev/null 2>&1 || return 1
-  timeout 20 codex doctor --json 2>/dev/null | python3 -c '
-import json,sys
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(1)
-checks=d.get("checks",{})
-auths=[c for k,c in checks.items() if "auth" in (str(c.get("id",""))+str(c.get("category",""))+str(k)).lower()]
-sys.exit(0 if auths and all(c.get("status")=="ok" for c in auths) else 1)'
+  timeout 10 codex login status >/dev/null 2>&1
 }
 ```
 
-Extend `deps_apply` signature + add a codex branch. Change line 68 and add the branch before `return 0` (line 78):
+Extend `deps_apply` (line 68) + add a codex branch before `return 0` (line 78):
 
 ```bash
 deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> — offer-install each needed dep; always 0
@@ -438,7 +529,7 @@ deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> — offer-
   return 0     # explicit — a disabled feature must not make this non-zero under set -e (finding 1)
 ```
 
-Extend `readiness_report` signature (line 94-95) + add codex lines before `return 0` (line 118):
+Extend `readiness_report` (lines 94-95) + add codex lines before `return 0` (line 118):
 
 ```bash
 readiness_report() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> — non-fatal env summary; always 0
@@ -464,12 +555,12 @@ Expected: `PASS test-deps`.
 
 ```bash
 git add lib/deps.sh skills/tools/test-deps.sh
-git commit -m "feat(codex-review): deps + readiness codex version/auth checks"
+git commit -m "feat(codex-review): deps + readiness codex version/login checks"
 ```
 
 ---
 
-### Task 4: Optional Codex plugin (`codex_plugin`) in settings + plugins
+### Task 5: Optional Codex plugin (`codex_plugin`) in settings + plugins
 
 **Files:**
 - Modify: `lib/py/jsonmerge.py` (accept `codex_plugin` arg, pop keys when false)
@@ -479,8 +570,8 @@ git commit -m "feat(codex-review): deps + readiness codex version/auth checks"
 - Test: `skills/tools/test-settings.sh`, `skills/tools/test-plugins.sh` (extend)
 
 **Interfaces:**
-- Produces: `settings_apply <hook> <dotnet> <codex_plugin>`; `plugins_apply <dotnet> <codex_plugin>`; `jsonmerge.py <template> <target> <hook> <dotnet> <codex_plugin>`. Trailing args optional/default false.
-- Marketplace name `openai-codex`, source `openai/codex-plugin-cc`, plugin id `codex@openai-codex`.
+- Produces: `settings_apply <hook> <dotnet> <codex_plugin>`; `plugins_apply <dotnet> <codex_plugin>`; `jsonmerge.py <template> <target> <hook> <dotnet> <codex_plugin>` (trailing args optional/default false). Marketplace `openai-codex`, source `openai/codex-plugin-cc`, plugin `codex@openai-codex`.
+- **Note:** callers pass the *effective* value `codex_review && codex_plugin` (wired in Task 6), so these functions never see `codex_plugin=true` while the feature is off.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -507,8 +598,7 @@ PY
 ```
 
 `skills/tools/test-plugins.sh` uses `chk`/`hasln`/`noln` and reads the fake-claude call log via
-`L="$(fake_claude_calls)"` (the fake logs each call as `$*`, e.g. `plugin install codex@openai-codex`).
-Append:
+`L="$(fake_claude_calls)"`. Append:
 
 ```bash
 # codex_plugin on -> marketplace add + install attempted
@@ -545,13 +635,11 @@ Expected: FAIL (jsonmerge ignores a 5th arg; plugins_apply ignores a 2nd arg).
   },
 ```
 
-`lib/py/jsonmerge.py` — parse arg + pop when false. After line 8 (`dotnet = …`):
+`lib/py/jsonmerge.py` — parse arg (after line 8) + pop when false (after the dotnet pop, lines 11-13):
 
 ```python
 codex_plugin = (len(sys.argv) > 5 and sys.argv[5] == "true")
 ```
-
-After the dotnet pop block (lines 11-13), add:
 
 ```python
 if not codex_plugin:              # keep settings.json consistent with plugins_apply
@@ -606,14 +694,15 @@ git commit -m "feat(codex-review): optional codex@openai-codex plugin, flag-gate
 
 ---
 
-### Task 5: `setup.sh` integration — flags, threading, claude.md phase
+### Task 6: `setup.sh` integration + README
 
 **Files:**
-- Modify: `setup.sh` (source `claudemd`; add 2 flags; add claude.md phase; renumber 8→9; thread flags into every call)
-- Test: `skills/tools/test-setup-idempotent.sh`, `skills/tools/test-config.sh` (extend)
+- Modify: `setup.sh` (source `claudemd`; add 2 flags; effective-gate the plugin; add claude.md phase; renumber 8→9; thread flags)
+- Modify: `README.md` (Codex cross-review section + dependency row)
+- Test: `skills/tools/test-config.sh`, `skills/tools/test-setup-idempotent.sh` (extend)
 
 **Interfaces:**
-- Consumes: `claudemd_apply` (Task 2), and the new trailing args on `deps_apply`/`settings_apply`/`skills_apply`/`plugins_apply`/`readiness_report` (Tasks 1,3,4).
+- Consumes: `claudemd_apply` (Task 3), and the new trailing args on `deps_apply`/`settings_apply`/`skills_apply`/`plugins_apply`/`readiness_report` (Tasks 2,4,5).
 
 - [ ] **Step 1: Source the new module**
 
@@ -634,32 +723,33 @@ In `setup.sh`'s `config_ensure_all` (after the `dotnet_skills` flag, ~line 12), 
   fi
 ```
 
-- [ ] **Step 3: Renumber phases 8→9 and thread the flags**
+- [ ] **Step 3: Compute the effective plugin flag, renumber phases 8→9, thread flags**
 
-Rewrite the phase body of `setup.sh` (lines 34-47) to 9 phases, inserting `claude.md` as phase 6 and passing the real flag values:
+Rewrite the phase body of `setup.sh` (lines 34-47). Compute `codex_plugin_eff = codex_review AND codex_plugin` (P1a hard gate — the plugin can never be on while the feature is off, even from stale config), insert `claude.md` as phase 6, and pass the real flag values:
 
 ```bash
-log "3/9 deps";          deps_apply "$(config_flag context7)" "$(config_flag playwright)" "$(config_flag azure_mcp)" "$(config_flag ado)" "$(config_flag dotnet_skills)" "$(config_flag codex_review)"
-log "4/9 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)" "$(config_flag codex_plugin)"
-log "5/9 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)" "$(config_flag codex_review)"
-log "6/9 claude.md";     claudemd_apply "$(config_flag codex_review)"
-log "7/9 plugins";       plugins_apply "$(config_flag dotnet_skills)" "$(config_flag codex_plugin)" || warn "plugin install failed (rest of config still applied)"
+cr="$(config_flag codex_review)"
+cpe=false; [ "$cr" = true ] && [ "$(config_flag codex_plugin)" = true ] && cpe=true
+log "3/9 deps";          deps_apply "$(config_flag context7)" "$(config_flag playwright)" "$(config_flag azure_mcp)" "$(config_flag ado)" "$(config_flag dotnet_skills)" "$cr"
+log "4/9 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)" "$cpe"
+log "5/9 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)" "$cr"
+log "6/9 claude.md";     claudemd_apply "$cr"
+log "7/9 plugins";       plugins_apply "$(config_flag dotnet_skills)" "$cpe" || warn "plugin install failed (rest of config still applied)"
 log "8/9 mcp";           mcp_apply
 log "9/9 verify"
 ```
 
-Also update the two earlier phase labels for consistency: `log "1/8 preflight"` → `log "1/9 preflight"`, `log "2/8 config"` → `log "2/9 config"`.
-
-And update the final `readiness_report` call (line ~46) to pass the codex flag:
+Update the two earlier labels for consistency: `log "1/8 preflight"` → `log "1/9 preflight"`,
+`log "2/8 config"` → `log "2/9 config"`. Update the final `readiness_report` call (line ~46):
 
 ```bash
-readiness_report "$(config_flag context7)" "$(config_flag playwright)" "$(config_flag azure_mcp)" "$(config_flag ado)" "$(config_flag dotnet_skills)" "$(config_flag codex_review)"
+readiness_report "$(config_flag context7)" "$(config_flag playwright)" "$(config_flag azure_mcp)" "$(config_flag ado)" "$(config_flag dotnet_skills)" "$cr"
 ```
 
 - [ ] **Step 4: Extend the config + idempotency tests**
 
-In `skills/tools/test-config.sh` (`set -euo pipefail`, hard-exit), after the existing flag
-round-trip block (line ~17), add:
+In `skills/tools/test-config.sh` (`set -euo pipefail`, hard-exit), after the flag round-trip block
+(line ~17), add:
 
 ```bash
 config_set_bool flags.codex_review true
@@ -668,116 +758,53 @@ config_set_bool flags.codex_plugin false
 [ "$(config_flag codex_plugin)" = false ] || { echo "FAIL codex_plugin flag"; exit 1; }
 ```
 
-In `skills/tools/test-setup-idempotent.sh`, the non-interactive run **dies** if any gating flag
-is absent (`config_ensure_flag` under `ASSUME_TTY=0` calls `die`). So add both flags to the
-secrets fixture heredoc (lines 27-30) — this also makes the double-run cover the skill copy +
-CLAUDE.md block:
+In `skills/tools/test-setup-idempotent.sh`, the non-interactive run **dies** if a gating flag is
+absent (`config_ensure_flag` under `ASSUME_TTY=0` calls `die`). Add both flags to the secrets
+fixture heredoc (lines 27-30) — this also makes the double-run cover the skill copy + CLAUDE.md block:
 
 ```json
 { "flags": {"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 ```
 
-And add a CLAUDE.md idempotency assertion: capture it after run 1, diff after run 2. After
-line 32 (`cp "$h/.claude/settings.json" "$h/first.json"`) add:
+Add a CLAUDE.md idempotency assertion. After line 32 (`cp "$h/.claude/settings.json" "$h/first.json"`):
 
 ```bash
 cp "$h/.claude/CLAUDE.md" "$h/first-claudemd.md"
 ```
 
-After the settings diff (line 37) add:
+After the settings diff (line 37):
 
 ```bash
 diff "$h/first-claudemd.md" "$h/.claude/CLAUDE.md" || { echo "FAIL CLAUDE.md not idempotent"; exit 1; }
 ```
 
-- [ ] **Step 5: Run the idempotency + full suite**
+- [ ] **Step 5: Document in README**
+
+Add a "Codex-ревью (кросс-провайдерная проверка)" section to `README.md` describing: the
+`codex_review` flag, that it installs the `codex-review` skill + a `~/.claude/CLAUDE.md` nudge,
+that it needs `codex login` (auth not managed by claudefiles), the effective-gated optional
+`codex_plugin` flag, and add a dependency-table row:
+
+```
+| `codex` CLI (≥0.142.5) | `npm i -g @openai/codex` | Codex cross-review спек/планов/диффов | `codex_review` |
+```
+
+- [ ] **Step 6: Run the full suite + idempotency invariant**
 
 ```bash
 bash skills/tools/test-config.sh
 bash skills/tools/test-setup-idempotent.sh
 bash skills/tools/run-all-tests.sh
 ```
-Expected: `ALL TESTS PASSED`. Manually verify the twice-run invariant if the harness supports it: second `setup.sh --non-interactive` run prints no changes and exits 0.
+Expected: `ALL TESTS PASSED`. The idempotent test proves `setup.sh --non-interactive` run twice
+yields zero diff (settings + manifest + CLAUDE.md) and exits 0.
 
-- [ ] **Step 6: Commit**
-
-```bash
-git add setup.sh skills/tools/test-config.sh skills/tools/test-setup-idempotent.sh
-git commit -m "feat(codex-review): wire flags + claude.md phase into setup.sh (8->9 phases)"
-```
-
----
-
-### Task 6: Optional real-`codex` smoke test + README
-
-**Files:**
-- Create: `skills/tools/smoke-codex-review.sh`
-- Modify: `skills/tools/run-all-tests.sh` (also run `smoke-*.sh`, self-skipping)
-- Modify: `README.md` (Codex cross-review section + dependency row)
-
-**Interfaces:**
-- Consumes: a real `codex` on PATH (self-skips otherwise). Asserts CLI contract only — no network model-run.
-
-- [ ] **Step 1: Write the smoke test**
-
-Create `skills/tools/smoke-codex-review.sh`:
+- [ ] **Step 7: Commit**
 
 ```bash
-#!/usr/bin/env bash
-# smoke-codex-review.sh — assert the REAL codex CLI still exposes the surface codex-review
-# depends on. Contract only: help/version/doctor-parse. No network model-run. Self-skips
-# when codex is absent, so it is safe inside run-all-tests.sh.
-set -uo pipefail
-if ! command -v codex >/dev/null 2>&1 || ! codex --version >/dev/null 2>&1; then
-  echo "SKIP smoke-codex-review (no runnable codex)"; exit 0
-fi
-fails=0
-chk() { local d="$1"; shift; if "$@"; then printf 'ok   %s\n' "$d"; else printf 'FAIL %s\n' "$d"; fails=1; fi; }
-v="$(codex --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-chk "codex >= 0.142.5 (got ${v:-none})" bash -c '[ "$(printf "0.142.5\n%s\n" "'"$v"'" | sort -V | head -1)" = "0.142.5" ]'
-chk "codex exec exposes --ephemeral"          bash -c 'codex exec   --help 2>&1 | grep -q -- --ephemeral'
-chk "codex exec exposes --skip-git-repo-check" bash -c 'codex exec   --help 2>&1 | grep -q -- --skip-git-repo-check'
-chk "codex exec exposes -o/--output-last-message" bash -c 'codex exec --help 2>&1 | grep -q -- --output-last-message'
-chk "codex review exposes --base"             bash -c 'codex review --help 2>&1 | grep -q -- --base'
-chk "codex doctor --json parses"              bash -c 'timeout 20 codex doctor --json 2>/dev/null | python3 -c "import json,sys; json.load(sys.stdin)"'
-[ "$fails" -eq 0 ] && echo "PASS smoke-codex-review" || { echo "SMOKE FAILED — codex CLI surface drifted"; exit 1; }
-```
-
-- [ ] **Step 2: Make `run-all-tests.sh` also run smoke scripts**
-
-In `skills/tools/run-all-tests.sh`, after the `test-*.sh` loop (line 17), add a second loop:
-
-```bash
-for t in "$here"/smoke-*.sh; do
-  [ -e "$t" ] || continue
-  name="$(basename "$t")"
-  echo "=== $name ==="
-  bash "$t" || { echo "FAIL: $name (exit $?)"; fail=1; }
-  echo
-done
-```
-
-- [ ] **Step 3: Run it**
-
-```bash
-bash skills/tools/smoke-codex-review.sh
-```
-Expected on this dev box (codex present, unauthenticated): the version + `--help` + `doctor --json parses` checks PASS; overall `PASS smoke-codex-review` (auth is not asserted here). On a machine without codex: `SKIP`.
-
-- [ ] **Step 4: Document in README**
-
-Add a "Codex-ревью (кросс-провайдерная проверка)" section to `README.md` describing: the `codex_review` flag, that it installs the `codex-review` skill + a `~/.claude/CLAUDE.md` nudge, that it needs `codex login` (auth not managed by claudefiles), the optional `codex_plugin` flag, and add a dependency-table row:
-
-```
-| `codex` CLI (≥0.142.5) | `npm i -g @openai/codex` | Codex cross-review спек/планов/диффов | `codex_review` |
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add skills/tools/smoke-codex-review.sh skills/tools/run-all-tests.sh README.md
-git commit -m "feat(codex-review): optional real-codex smoke test + README"
+git add setup.sh README.md skills/tools/test-config.sh skills/tools/test-setup-idempotent.sh
+git commit -m "feat(codex-review): wire flags + effective plugin gate + claude.md phase into setup.sh"
 ```
 
 ---
@@ -785,24 +812,32 @@ git commit -m "feat(codex-review): optional real-codex smoke test + README"
 ## Self-Review
 
 **1. Spec coverage:**
-- Skill brain (routing, batch-safe, inline model, triage) → Task 1 (SKILL.md content). ✓
-- CLAUDE.md nudge → Task 2. ✓
-- Flag `codex_review` gates feature → Tasks 1,3,5. ✓
-- deps version check + readiness auth (`codex doctor --json`) → Task 3. ✓
-- Optional plugin `codex_plugin` default off → Task 4. ✓
-- setup.sh threading + phases + no `lib/codexcfg.sh` (inline `-c` only) → Task 5 + Task 1 SKILL.md. ✓
-- Tests against fake codex + optional smoke → Tasks 1,3,4 (fake), Task 6 (smoke). ✓
-- Idempotency invariant → Task 2 (claudemd), Task 5 (test-setup-idempotent). ✓
+- Skill brain (routing, batch-safe, inline model, fixed fallback, triage) → Task 2 (SKILL.md). ✓
+- CLAUDE.md nudge → Task 3. ✓
+- Feature flag `codex_review` gates + **removes traces** on disable → Tasks 2 (skill rm), 3 (block rm), 6 (effective plugin gate). ✓
+- deps version check + readiness auth via `codex login status` → Task 4. ✓
+- Optional plugin `codex_plugin`, effective `codex_review && codex_plugin` → Tasks 5, 6. ✓
+- setup.sh threading + phases + no `lib/codexcfg.sh` (inline `-c` only) → Task 6 + Task 2 SKILL.md. ✓
+- Tests against fake codex + front-loaded contract smoke → Tasks 2,4,5 (fake), Task 1 (smoke). ✓
+- Idempotency invariant (incl. CLAUDE.md) → Task 3, Task 6. ✓
 - Public repo / no secrets: no new tracked secret; codex auth external. ✓
 
-**2. Placeholder scan:** Model id (`gpt-5.5`), effort (`high`), version floor (`0.142.5`), timeout (`900`), marketplace/plugin names, all command flags are concrete. No TBD/TODO. ✓
+**2. Placeholder scan:** Model (`gpt-5.5`), effort (`high`), floor (`0.142.5`), timeout (`900`), marketplace/plugin names, all flags concrete. No TBD/TODO. ✓
 
-**3. Type/name consistency:** `codex_review`/`codex_plugin` flag names, `claudemd_apply`, `_codex_ok`, `_codex_authed`, marketplace `openai-codex`, plugin `codex@openai-codex`, `skills_apply`/`deps_apply`/`readiness_report`/`settings_apply`/`plugins_apply` trailing-arg signatures — used identically across Tasks 1–6. ✓
+**3. Type/name consistency:** `codex_review`/`codex_plugin` flags, `cpe` effective flag, `claudemd_apply`, `_codex_ok`, `_codex_authed`, marketplace `openai-codex`, plugin `codex@openai-codex`, and the trailing-arg signatures of `skills_apply`/`deps_apply`/`readiness_report`/`settings_apply`/`plugins_apply` — used identically across Tasks 1–6. ✓
 
 ## Notes for the executor
 
-- **Backward compatibility during execution:** every changed signature adds a *trailing* optional arg with a `false`/default, so `setup.sh` (unchanged until Task 5) keeps working after Tasks 1–4. Order matters only in that Task 5 comes last.
-- **`codex doctor --json` auth key:** `_codex_authed` scans all `checks` whose id/category contains `auth` and requires `status=="ok"`. The exact key on a real authed box should be confirmed by running `codex doctor --json` after `codex login`; adjust the filter if the structure differs. This is readiness-only (non-fatal), and Task 6's smoke asserts the JSON parses.
-- **`codex review` vs `codex exec` flag sets differ:** `--sandbox/--ephemeral/-o/--skip-git-repo-check` are `codex exec`-only; `codex review` takes `--base/--commit/--uncommitted/-c` and prints to stdout. The SKILL.md keeps these two command shapes distinct — do not cross-apply flags.
-```
+- **Execution order matters only at the ends:** Task 1 (contract smoke) verifies the CLI surface before anything builds on it; Task 6 (setup.sh) threads everything and must be last. Tasks 2–5 each add a *trailing* optional arg with a `false` default, so `setup.sh` keeps working between tasks.
+- **`codex review` vs `codex exec` flag sets differ:** `--sandbox/--ephemeral/-o/--skip-git-repo-check` are `codex exec`-only; `codex review` takes `--base/--commit/--uncommitted/-c` and prints to stdout. The SKILL.md keeps the two command shapes distinct — do not cross-apply flags. The `codex exec` fallback for diffs passes the instruction as the prompt argument and the diff via piped stdin (`<stdin>` block) — never with `-`.
+- **Effective plugin gate (P1a):** setup.sh passes `cpe = codex_review && codex_plugin` to both `settings_apply` and `plugins_apply`, so flipping `codex_review` off also removes the plugin from `settings.json` (jsonmerge pops the key) — no stale plugin.
 
+## Appendix: round-2 external review (Codex) — incorporated
+
+Plan run through Codex (GPT-5.5) before execution. Verdict: **REVISE**, 5 findings. Triage (receiving-code-review):
+
+- **P1a** (feature flag didn't fully gate/clean up) — **accepted**: effective `codex_plugin = codex_review && codex_plugin` in setup.sh; `skills_apply false` removes the skill dir; added toggle on→off test.
+- **P1b** (fallback `codex exec … - "prompt"` broke the CLI contract) — **accepted**: instruction as prompt arg + diff via piped stdin (`<stdin>` block) + `--cd`, no `-`.
+- **P1/P2** (`codex review` verified too late) — **partially accepted**: contract smoke moved to Task 1 (front-loaded). Rejected downgrading `codex review` to a mere fast-path — it exists and works on v0.142.5 (verified) and is purpose-built.
+- **P2** (`_codex_authed` via `doctor --json` brittle) — **accepted** (verified `codex login status` exits 1 when logged out): switched to `codex login status`.
+- **P3** (claudemd red test failed via `source`, noisy) — **accepted**: stub-first so the red test fails on an assertion.
