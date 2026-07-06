@@ -17,6 +17,10 @@ config_set_bool flags.playwright false
 [ "$(config_flag playwright)" = false ] || { echo "FAIL flag false"; exit 1; }
 # a false flag must read as the literal "false" (never Python's "False") so build_servers sees it falsy
 [ "$(config_get flags.playwright)" = "false" ] || { echo "FAIL bool literal"; exit 1; }
+config_set_bool flags.codex_review true
+[ "$(config_flag codex_review)" = true ]  || { echo "FAIL codex_review flag"; exit 1; }
+config_set_bool flags.codex_plugin false
+[ "$(config_flag codex_plugin)" = false ] || { echo "FAIL codex_plugin flag"; exit 1; }
 
 # config_has distinguishes present-but-empty from absent (finding 2)
 config_set ado.email ""

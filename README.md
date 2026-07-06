@@ -2,7 +2,7 @@
 
 Самостоятельный репозиторий, который владеет **всей** конфигурацией `~/.claude` (Claude Code) и ставит её одной идемпотентной командой. `settings.json`, персональные скиллы, плагины, MCP-серверы и SessionStart-хук — всё раскатывает `setup.sh`. chezmoi тянет этот репозиторий как external и перезапускает `setup.sh` при изменении HEAD. Секреты спрашиваются один раз в локальное хранилище вне git — ничего секретного в репозиторий не попадает.
 
-## Что делает `setup.sh` (8 фаз)
+## Что делает `setup.sh` (9 фаз)
 
 `lib/*.sh` — сфокусированные модули, каждый тестируется против фейкового `claude` и фикстур-`$HOME`. Оркестратор `setup.sh` гоняет их по порядку:
 
@@ -10,10 +10,11 @@
 2. **config** — читает/спрашивает флаги и секреты из `~/.config/claudefiles/secrets.json` (только при TTY; без TTY — падает с понятным списком, а не висит).
 3. **deps** — по флагам проверяет системные зависимости и предлагает поставить недостающие через `pacman` (Arch-only, `y/N` → `sudo pacman`): `node`/`npx` для MCP-серверов, `chromium` для Playwright, `dotnet-sdk` для .NET-плагина. Любая ветка не фатальна — нет TTY/`pacman`/`sudo` печатает ручную команду и продолжает.
 4. **settings.json** — заменяет управляемые ключи (`model`, `effortLevel`, `tui`, `theme`, `enabledPlugins`, `extraKnownMarketplaces`, `hooks`) из шаблона, сохраняя любые чужие ключи. Плагин dotnet попадает в `enabledPlugins` только если флаг включён.
-5. **skills** — копирует `context7-mcp`, а при `dotnet_skills=true` клонирует `dotnet/skills` (если нет), регенерирует каталог с путями этой машины и ставит симлинк `dotnet-router`.
-6. **plugins** — идемпотентно ставит `superpowers@claude-plugins-official` (всегда) и, при `dotnet_skills=true`, `dotnet@dotnet-agent-skills`; добавляет их marketplace при отсутствии (гварды: повторный запуск — no-op).
-7. **mcp** — сверяет user-scope MCP-серверы с манифестом `managed-mcp.json`: если набор не менялся — ноль вызовов; иначе убирает ровно ранее управляемые имена (без «подметания» по префиксу) и добавляет текущие. Чужие/неуправляемые серверы не трогает.
-8. **verify** — валидирует `settings.json`, самотест каталога и печатает readiness-сводку (`claude`, node+npx, chromium, dotnet, оба плагина) — не фатально.
+5. **skills** — копирует `context7-mcp`, при `codex_review=true` — `codex-review`, а при `dotnet_skills=true` клонирует `dotnet/skills` (если нет), регенерирует каталог с путями этой машины и ставит симлинк `dotnet-router`. Выключенный флаг убирает свой скилл (не оставляет следов).
+6. **claude.md** — при `codex_review=true` вписывает marker-блок с нажем в `~/.claude/CLAUDE.md`, сохраняя любое пользовательское содержимое; выключенный флаг — блок удаляется. Идемпотентно.
+7. **plugins** — идемпотентно ставит `superpowers@claude-plugins-official` (всегда), при `dotnet_skills=true` — `dotnet@dotnet-agent-skills`, при эффективном `codex_review && codex_plugin` — `codex@openai-codex`; добавляет их marketplace при отсутствии (гварды: повторный запуск — no-op).
+8. **mcp** — сверяет user-scope MCP-серверы с манифестом `managed-mcp.json`: если набор не менялся — ноль вызовов; иначе убирает ровно ранее управляемые имена (без «подметания» по префиксу) и добавляет текущие. Чужие/неуправляемые серверы не трогает.
+9. **verify** — валидирует `settings.json`, самотест каталога и печатает readiness-сводку (`claude`, node+npx, chromium, dotnet, плагины, а при `codex_review` — версия `codex` и статус `codex login`) — не фатально.
 
 `setup.sh` запущенный дважды не даёт diff и выходит 0.
 
@@ -26,6 +27,7 @@
 | `node` + `npx` | `nodejs npm` | запуск любого MCP-сервера (все на `npx`) | любой из `context7`/`playwright`/`azure_mcp`/`ado` |
 | `chromium` | `chromium` | браузер Playwright MCP | `playwright` |
 | `.NET SDK` (`dotnet`) | `dotnet-sdk` | C# language server / dotnet-плагин | `dotnet_skills` |
+| `codex` CLI (≥0.142.5) | `npm i -g @openai/codex` | Codex cross-review спек/планов/диффов | `codex_review` |
 
 `claude` CLI фаза не ставит — это задача chezmoi-бутстрапа; preflight предупреждает, а readiness в конце сообщает статус. Проверка `chromium` согласована с резолвером `build_servers.py` (учитывает тот же override `playwright.chromium_path`). Не-Arch (нет `pacman`) — печатается ручная команда, прогон не падает.
 
@@ -51,7 +53,7 @@ git clone https://github.com/stpntkhnv/claudefiles.git ~/dev/claudefiles && cd ~
 
 Живут только в `~/.config/claudefiles/` — вне репозитория, `chmod 600`:
 
-- **`secrets.json`** — флаги (`context7`, `playwright`, `azure_mcp`, `ado`, `dotnet_skills`), `context7_api_key`, ADO email/orgs/PAT-ы. Заполняется prompt-once при TTY.
+- **`secrets.json`** — флаги (`context7`, `playwright`, `azure_mcp`, `ado`, `dotnet_skills`, `codex_review`, `codex_plugin`), `context7_api_key`, ADO email/orgs/PAT-ы. Заполняется prompt-once при TTY. Авторизацию Codex (`~/.codex/auth.json`) claudefiles **не** трогает — это `codex login`.
 - **`managed-mcp.json`** — манифест применённых MCP-серверов (для сверки и удаления ровно своего); содержит base64-PAT для ADO, поэтому тоже `600`.
 
 Тест гарантирует, что ни один секретный путь не трекается; репозиторий **публичный**.
@@ -67,14 +69,24 @@ git clone https://github.com/stpntkhnv/claudefiles.git ~/dev/claudefiles && cd ~
 
 Только `SKILL.md` роутера в git; каталог — генерируемый машинно-специфичный артефакт (абсолютные пути), поэтому в `.gitignore` — иначе каждый чекаут «пачкался» бы и ломал `git pull --ff-only` deploy-копии.
 
+## Codex-ревью (кросс-провайдерная проверка)
+
+Опциональный флаг **`codex_review`** добавляет второго, максимально непохожего ревьюера — [Codex](https://github.com/openai/codex) (GPT-5.5, high reasoning) — поверх самопроверки superpowers. На трёх чекпоинтах (спека, план, дифф кода) артефакт уходит в Codex, а провалидированные замечания вплетаются в то, что показывается пользователю. Ревью **совещательное и однопроходное**: Codex советует, но не блокирует; findings триажатся дисциплиной `receiving-code-review`.
+
+- **Скилл `codex-review`** — «мозг» фичи: роутинг по типу артефакта (`codex exec` для `.md`-спек/планов в read-only sandbox репозитория, `codex review --base` для диффа), пиннинг модели inline (`-c model=…`), мягкая деградация при отсутствии/неавторизованности `codex`. Ставится копией в `~/.claude/skills` при `codex_review=true`.
+- **Наж в `~/.claude/CLAUDE.md`** — marker-блок (безусловное правило, всегда в контексте), напоминающий прогнать скилл на чекпоинтах. Управляется идемпотентно; выключение флага убирает блок, сохраняя пользовательское содержимое.
+- **Предусловие — `codex login`.** claudefiles владеет только скиллом и нажем; авторизация Codex живёт в `~/.codex/auth.json` и остаётся за пользователем. readiness-фаза сообщает версию `codex` и статус логина; глобальный `~/.codex/config.toml` не трогается (модель/effort передаются inline на каждом вызове).
+- **Опциональный `codex_plugin`** (по умолчанию off, эффективно `codex_review && codex_plugin`) — доставляет плагин `codex@openai-codex` для adversarial-режима. Никогда не включён, пока выключен `codex_review`.
+
 ## Раскладка
 
 ```
-setup.sh                      # оркестратор (8 фаз)
-lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, common, apply-if-changed
+setup.sh                      # оркестратор (9 фаз)
+lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, claudemd, common, apply-if-changed
 lib/py/                       # config_io.py, jsonmerge.py
 claude/settings/              # settings.template.json (управляемые ключи)
 claude/skills/context7-mcp/   # SKILL.md (копируется в ~/.claude)
+claude/skills/codex-review/   # SKILL.md кросс-ревьюера (копируется при codex_review)
 claude/skills/dotnet-router/  # SKILL.md роутера (каталог генерируется, вне git)
 claude/mcp/build_servers.py   # сборка MCP-конфига из secrets.json
 claude/hooks/detect-dotnet.sh # SessionStart-хук
