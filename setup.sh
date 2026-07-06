@@ -2,12 +2,12 @@
 # Install the full ~/.claude config on this machine. Idempotent; the update path too.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for m in common config settings skills plugins mcp hooks; do source "$ROOT/lib/$m.sh"; done
+for m in common config deps settings skills plugins mcp hooks; do source "$ROOT/lib/$m.sh"; done
 
-log "1/7 preflight"; require_cmd git; require_cmd python3
+log "1/8 preflight"; require_cmd git; require_cmd python3
 command -v claude >/dev/null 2>&1 || warn "claude not on PATH yet (install it, then re-run)"
 
-log "2/7 config"
+log "2/8 config"
 [ "${1:-}" = "--non-interactive" ] && export CLAUDEFILES_ASSUME_TTY=0
 config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
   config_ensure_flag dotnet_skills "Install .NET skills plugin? (y/N)"
@@ -36,11 +36,13 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
 }
 config_ensure_all
 
-log "3/7 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)"
-log "4/7 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)"
-log "5/7 plugins";       plugins_apply "$(config_flag dotnet_skills)" || warn "plugin install failed (rest of config still applied)"
-log "6/7 mcp";           mcp_apply
-log "7/7 verify"
+log "3/8 deps";          deps_apply "$(config_flag context7)" "$(config_flag playwright)" "$(config_flag azure_mcp)" "$(config_flag ado)" "$(config_flag dotnet_skills)"
+log "4/8 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)"
+log "5/8 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)"
+log "6/8 plugins";       plugins_apply "$(config_flag dotnet_skills)" || warn "plugin install failed (rest of config still applied)"
+log "7/8 mcp";           mcp_apply
+log "8/8 verify"
 if python3 -m json.tool "$HOME/.claude/settings.json" >/dev/null 2>&1; then log "settings.json valid"; else die "settings.json is invalid after apply"; fi
 "$ROOT/skills/tools/test-gen-dotnet-catalog.sh" >/dev/null 2>&1 || warn "catalog self-test FAILED"
+readiness_report "$(config_flag context7)" "$(config_flag playwright)" "$(config_flag azure_mcp)" "$(config_flag ado)" "$(config_flag dotnet_skills)"
 log "Done. Restart Claude Code sessions to pick up skills and hook."
