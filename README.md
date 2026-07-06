@@ -2,19 +2,32 @@
 
 Самостоятельный репозиторий, который владеет **всей** конфигурацией `~/.claude` (Claude Code) и ставит её одной идемпотентной командой. `settings.json`, персональные скиллы, плагины, MCP-серверы и SessionStart-хук — всё раскатывает `setup.sh`. chezmoi тянет этот репозиторий как external и перезапускает `setup.sh` при изменении HEAD. Секреты спрашиваются один раз в локальное хранилище вне git — ничего секретного в репозиторий не попадает.
 
-## Что делает `setup.sh` (7 фаз)
+## Что делает `setup.sh` (8 фаз)
 
 `lib/*.sh` — сфокусированные модули, каждый тестируется против фейкового `claude` и фикстур-`$HOME`. Оркестратор `setup.sh` гоняет их по порядку:
 
 1. **preflight** — проверка git/python3; про `claude` предупреждает, но не падает.
 2. **config** — читает/спрашивает флаги и секреты из `~/.config/claudefiles/secrets.json` (только при TTY; без TTY — падает с понятным списком, а не висит).
-3. **settings.json** — заменяет управляемые ключи (`model`, `effortLevel`, `tui`, `theme`, `enabledPlugins`, `extraKnownMarketplaces`, `hooks`) из шаблона, сохраняя любые чужие ключи. Плагин dotnet попадает в `enabledPlugins` только если флаг включён.
-4. **skills** — копирует `context7-mcp`, а при `dotnet_skills=true` клонирует `dotnet/skills` (если нет), регенерирует каталог с путями этой машины и ставит симлинк `dotnet-router`.
-5. **plugins** — идемпотентно добавляет marketplace `dotnet/skills` и ставит плагин (гварды: повторный запуск — no-op).
-6. **mcp** — сверяет user-scope MCP-серверы с манифестом `managed-mcp.json`: если набор не менялся — ноль вызовов; иначе убирает ровно ранее управляемые имена (без «подметания» по префиксу) и добавляет текущие. Чужие/неуправляемые серверы не трогает.
-7. **verify** — валидирует `settings.json`, самотест каталога.
+3. **deps** — по флагам проверяет системные зависимости и предлагает поставить недостающие через `pacman` (Arch-only, `y/N` → `sudo pacman`): `node`/`npx` для MCP-серверов, `chromium` для Playwright, `dotnet-sdk` для .NET-плагина. Любая ветка не фатальна — нет TTY/`pacman`/`sudo` печатает ручную команду и продолжает.
+4. **settings.json** — заменяет управляемые ключи (`model`, `effortLevel`, `tui`, `theme`, `enabledPlugins`, `extraKnownMarketplaces`, `hooks`) из шаблона, сохраняя любые чужие ключи. Плагин dotnet попадает в `enabledPlugins` только если флаг включён.
+5. **skills** — копирует `context7-mcp`, а при `dotnet_skills=true` клонирует `dotnet/skills` (если нет), регенерирует каталог с путями этой машины и ставит симлинк `dotnet-router`.
+6. **plugins** — идемпотентно ставит `superpowers@claude-plugins-official` (всегда) и, при `dotnet_skills=true`, `dotnet@dotnet-agent-skills`; добавляет их marketplace при отсутствии (гварды: повторный запуск — no-op).
+7. **mcp** — сверяет user-scope MCP-серверы с манифестом `managed-mcp.json`: если набор не менялся — ноль вызовов; иначе убирает ровно ранее управляемые имена (без «подметания» по префиксу) и добавляет текущие. Чужие/неуправляемые серверы не трогает.
+8. **verify** — валидирует `settings.json`, самотест каталога и печатает readiness-сводку (`claude`, node+npx, chromium, dotnet, оба плагина) — не фатально.
 
 `setup.sh` запущенный дважды не даёт diff и выходит 0.
+
+## Системные зависимости
+
+Фаза **deps** (Arch-only) проверяет только то, что нужно под включённые флаги, и предлагает поставить недостающее через `pacman` (`y/N` → `sudo pacman -S --needed`; под root — напрямую). Любая ветка не фатальна: нет TTY / `pacman` / `sudo` — печатает ручную команду и продолжает.
+
+| Зависимость | Пакет | Нужна для | Флаг |
+|-------------|-------|-----------|------|
+| `node` + `npx` | `nodejs npm` | запуск любого MCP-сервера (все на `npx`) | любой из `context7`/`playwright`/`azure_mcp`/`ado` |
+| `chromium` | `chromium` | браузер Playwright MCP | `playwright` |
+| `.NET SDK` (`dotnet`) | `dotnet-sdk` | C# language server / dotnet-плагин | `dotnet_skills` |
+
+`claude` CLI фаза не ставит — это задача chezmoi-бутстрапа; preflight предупреждает, а readiness в конце сообщает статус. Проверка `chromium` зеркалит резолвер `build_servers.py` (учитывает override `playwright.chromium_path`). Не-Arch (нет `pacman`) — печатается ручная команда, прогон не падает.
 
 ## Установка
 
@@ -32,7 +45,7 @@ chezmoi ставит `claude` CLI, тянет claudefiles как `git-repo` exte
 git clone https://github.com/stpntkhnv/claudefiles.git ~/dev/claudefiles && cd ~/dev/claudefiles && ./setup.sh
 ```
 
-Требуется: git, bash, GNU coreutils/awk, python3 (только stdlib). Плагин `superpowers@claude-plugins-official` ставится внутри Claude Code (`/plugin install superpowers@claude-plugins-official`) — процессный каркас, в чьи этапы встраивается dotnet-router.
+Требуется: git, bash, GNU coreutils/awk, python3 (только stdlib). Системные зависимости (`node`/`npx`, `chromium`, `.NET SDK`) фаза **deps** предложит поставить через `pacman` — только под нужные включённые флаги (см. «Системные зависимости»). Оба плагина ставит сам `setup.sh`: `superpowers@claude-plugins-official` (всегда) — процессный каркас, в чьи этапы встраивается dotnet-router — и `dotnet@dotnet-agent-skills` при `dotnet_skills=true`.
 
 ## Секреты
 
@@ -57,8 +70,8 @@ git clone https://github.com/stpntkhnv/claudefiles.git ~/dev/claudefiles && cd ~
 ## Раскладка
 
 ```
-setup.sh                      # оркестратор (7 фаз)
-lib/*.sh                      # config, settings, skills, plugins, mcp, hooks, common, apply-if-changed
+setup.sh                      # оркестратор (8 фаз)
+lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, common, apply-if-changed
 lib/py/                       # config_io.py, jsonmerge.py
 claude/settings/              # settings.template.json (управляемые ключи)
 claude/skills/context7-mcp/   # SKILL.md (копируется в ~/.claude)
