@@ -19,14 +19,19 @@ _ensure_plugin() {        # <plugin@marketplace> — install if absent. Whole-to
   fi
 }
 
-plugins_apply() {         # <dotnet_enabled:true|false>
-  local dotnet="${1:-false}"
+plugins_apply() {         # <dotnet_enabled:true|false> <codex_plugin:true|false>
+  local dotnet="${1:-false}" codex_plugin="${2:-false}"
   _ensure_marketplace "claude-plugins-official" "anthropics/claude-plugins-official"
   _ensure_plugin      "superpowers@claude-plugins-official"
   if [ "$dotnet" = true ]; then
     command -v dotnet >/dev/null 2>&1 || warn "dotnet SDK not found; C# LSP will not start until installed"
     _ensure_marketplace "dotnet-agent-skills" "dotnet/skills"
     _ensure_plugin      "dotnet@dotnet-agent-skills"
+  fi
+  if [ "$codex_plugin" = true ]; then
+    command -v codex >/dev/null 2>&1 || warn "codex CLI not found; codex plugin will not function until installed"
+    _ensure_marketplace "openai-codex" "openai/codex-plugin-cc"
+    _ensure_plugin      "codex@openai-codex"
   fi
   return 0
 }

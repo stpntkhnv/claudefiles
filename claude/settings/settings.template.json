@@ -5,10 +5,12 @@
   "theme": "dark",
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,
-    "dotnet@dotnet-agent-skills": true
+    "dotnet@dotnet-agent-skills": true,
+    "codex@openai-codex": true
   },
   "extraKnownMarketplaces": {
-    "dotnet-agent-skills": { "source": { "source": "github", "repo": "dotnet/skills" } }
+    "dotnet-agent-skills": { "source": { "source": "github", "repo": "dotnet/skills" } },
+    "openai-codex": { "source": { "source": "github", "repo": "openai/codex-plugin-cc" } }
   },
   "hooks": {
     "SessionStart": [

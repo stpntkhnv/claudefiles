@@ -52,4 +52,14 @@ chmod +x "$h2/bin/claude"; export PATH="$h2/bin:$PATH"; hash -r 2>/dev/null || t
 chk "failing-list: plugins_apply returns 0 under set -e"  [ "$rc" -eq 0 ]
 chk "failing-list: superpowers install still attempted"   hasln "install superpowers@claude-plugins-official" "$INSTLOG"
 
+# codex_plugin on -> marketplace add + install attempted
+setup_fixture_home >/dev/null; L="$(fake_claude_calls)"
+plugins_apply false true
+chk "codex on: marketplace added" hasln "plugin marketplace add openai/codex-plugin-cc" "$L"
+chk "codex on: plugin installed"  hasln "plugin install codex@openai-codex" "$L"
+# codex_plugin off -> not attempted
+setup_fixture_home >/dev/null; L="$(fake_claude_calls)"
+plugins_apply false false
+chk "codex off: no codex install" noln "plugin install codex@openai-codex" "$L"
+
 [ "$fails" -eq 0 ] && echo "PASS test-plugins" || { echo "SOME test-plugins CASES FAILED"; exit 1; }

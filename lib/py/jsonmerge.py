@@ -6,11 +6,15 @@ import json, os, sys
 MANAGED = ["model","effortLevel","tui","theme","enabledPlugins","extraKnownMarketplaces","hooks"]
 tmpl, target, hook = sys.argv[1], sys.argv[2], sys.argv[3]
 dotnet = (len(sys.argv) > 4 and sys.argv[4] == "true")
+codex_plugin = (len(sys.argv) > 5 and sys.argv[5] == "true")
 managed = json.load(open(tmpl))
 managed["hooks"]["SessionStart"][0]["hooks"][0]["command"] = hook
 if not dotnet:                    # keep settings.json consistent with plugins_apply (finding 6)
     managed["enabledPlugins"].pop("dotnet@dotnet-agent-skills", None)
     managed["extraKnownMarketplaces"].pop("dotnet-agent-skills", None)
+if not codex_plugin:              # keep settings.json consistent with plugins_apply
+    managed["enabledPlugins"].pop("codex@openai-codex", None)
+    managed["extraKnownMarketplaces"].pop("openai-codex", None)
 try:
     existing = json.load(open(target))
 except FileNotFoundError:
