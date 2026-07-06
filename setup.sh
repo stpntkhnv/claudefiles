@@ -38,7 +38,7 @@ config_ensure_all
 
 log "3/7 settings.json"; settings_apply "$(hooks_hook_path "$ROOT")" "$(config_flag dotnet_skills)"
 log "4/7 skills";        skills_apply "$ROOT" "$(config_flag dotnet_skills)"
-log "5/7 plugins";       if [ "$(config_flag dotnet_skills)" = true ]; then plugins_apply || warn "plugin install failed (rest of config still applied)"; else log "skip plugins"; fi
+log "5/7 plugins";       plugins_apply "$(config_flag dotnet_skills)" || warn "plugin install failed (rest of config still applied)"
 log "6/7 mcp";           mcp_apply
 log "7/7 verify"
 if python3 -m json.tool "$HOME/.claude/settings.json" >/dev/null 2>&1; then log "settings.json valid"; else die "settings.json is invalid after apply"; fi
