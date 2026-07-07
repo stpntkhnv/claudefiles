@@ -38,6 +38,24 @@ fi
 
 eff=""; [ "$EFFORT" != "-" ] && [ -n "$EFFORT" ] && eff=" · ${EFFORT}"
 
-# cyan model, blue dir, magenta branch; ctx passed as DATA (%s), never as format
-printf '\033[36m%s\033[0m \033[34m%s\033[0m\033[35m%s\033[0m%s\033[2m%s\033[0m\n' \
-  "$MODEL" "$base" "$branch" "$ctx" "$eff"
+# profile badge: $1 wins, else derive from CLAUDE_CONFIG_DIR; sanitize hard
+prof="${1:-}"
+if [ -z "$prof" ]; then
+  d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; b="${d##*/}"
+  case "$b" in
+    .claude)   prof="vanilla" ;;
+    .claude-*) prof="${b#.claude-}" ;;
+    *)         prof="$b" ;;
+  esac
+fi
+prof="$(printf '%s' "$prof" | tr -cd 'A-Za-z0-9_-' | cut -c1-16)"; [ -z "$prof" ] && prof="unknown"
+case "$prof" in
+  vanilla) pcol=$'\033[1;36m' ;;
+  super)   pcol=$'\033[1;35m' ;;
+  *)       pcol=$'\033[1;33m' ;;
+esac
+badge="${pcol}[${prof}]"$'\033[0m'" "
+
+# badge (data) then cyan model, blue dir, magenta branch; ctx passed as DATA (%s), never as format
+printf '%s\033[36m%s\033[0m \033[34m%s\033[0m\033[35m%s\033[0m%s\033[2m%s\033[0m\n' \
+  "$badge" "$MODEL" "$base" "$branch" "$ctx" "$eff"
