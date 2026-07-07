@@ -1,5 +1,4 @@
 # mcp.sh — reconcile user-scope MCP servers (in $CLAUDE_CONFIG_DIR) against a per-profile manifest.
-_MCP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _mcp_manifest() { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-mcp.$1.json"; }
 _mcp_legacy()   { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-mcp.json"; }
 

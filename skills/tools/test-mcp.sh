@@ -21,6 +21,7 @@ grep -q "mcp remove --scope user azure"      "$CLAUDE_FAKE_LOG" || { echo FAIL n
 grep -q "mcp add-json --scope user context7" "$CLAUDE_FAKE_LOG" || { echo FAIL no-add-context7; exit 1; }
 [ -f "$(_mcp_manifest vanilla)" ] || { echo FAIL no-vanilla-manifest; exit 1; }
 [ -f "$h/.config/claudefiles/managed-mcp.json" ] && { echo FAIL legacy-not-consumed; exit 1; }
+[ "$(stat -c '%a' "$(_mcp_manifest vanilla)")" = "600" ] || { echo FAIL manifest-perms; exit 1; }
 
 # idempotent: same servers, same manifest -> no claude calls
 : > "$CLAUDE_FAKE_LOG"

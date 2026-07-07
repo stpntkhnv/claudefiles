@@ -2,7 +2,7 @@
 # Install the full ~/.claude config on this machine. Idempotent; the update path too.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for m in common config deps settings skills plugins mcp hooks claudemd profiles; do source "$ROOT/lib/$m.sh"; done
+for m in common config deps settings skills plugins mcp claudemd profiles; do source "$ROOT/lib/$m.sh"; done
 
 log "preflight"; require_cmd git; require_cmd python3
 command -v claude >/dev/null 2>&1 || warn "claude not on PATH yet (install it, then re-run)"

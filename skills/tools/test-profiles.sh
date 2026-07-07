@@ -43,4 +43,28 @@ provision_selected "$cf" vanilla
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["theme"]=="light";assert "enabledPlugins" not in d;print("ok vanilla-recipe")' "$h/.claude/settings.json"
 [ -f "$h/.claude/skills/context7-mcp/SKILL.md" ] || { echo FAIL vanilla-skill; exit 1; }
 grep -q "claudefiles:personal" "$h/.claude/CLAUDE.md" || { echo FAIL vanilla-claudemd; exit 1; }
+
+# P1a-FAILURE: recipe_super must return 1 (and provision_selected must record 'super' as
+# failed) when superpowers is NOT actually installed after plugins_apply — e.g. plugins_apply
+# swallowed an install error internally. Force a `claude` that stays on PATH (so recipe_super
+# takes the verify branch, not the "claude absent" warn-only branch) but whose `plugin list`
+# never reports superpowers@, regardless of `plugin install` calls (a logged no-op here).
+# If recipe_super's P1a check were missing/inverted (i.e. it just `return 0`d), this fake would
+# still make `claude plugin list | grep -q 'superpowers@'` fail, so a broken/removed check would
+# make this assertion RED (super would then be absent from PROVISION_FAILED) — the test is not
+# vacuous.
+cat > "$h/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$CLAUDE_FAKE_LOG"
+case "$1 $2" in
+  "plugin list") : ;;    # always empty output: superpowers@ can never match
+  *) : ;;                # marketplace add / plugin install: logged no-ops, no state kept
+esac
+exit 0
+EOF
+chmod +x "$h/bin/claude"
+hash -r 2>/dev/null || true
+
+provision_selected "$cf" super
+printf '%s\n' "${PROVISION_FAILED[@]:-}" | grep -qx super || { echo FAIL p1a-failure-not-recorded; exit 1; }
 echo "PASS test-profiles"
