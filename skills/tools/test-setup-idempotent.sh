@@ -25,17 +25,19 @@ chmod +x "$h/bin/pacman" "$h/bin/sudo"; hash -r 2>/dev/null || true
 # seed non-interactive config so no prompt is needed
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags": {"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
+{ "flags": {"profile_super":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 cp "$h/.claude/settings.json" "$h/first.json"
+cp "$h/.claude-super/settings.json" "$h/first-super.json"
 cp "$h/.claude/CLAUDE.md" "$h/first-claudemd.md"
-manifest="$h/.config/claudefiles/managed-mcp.json"; cp "$manifest" "$h/first-manifest.json"
+manifest="$h/.config/claudefiles/managed-mcp.vanilla.json"; cp "$manifest" "$h/first-manifest.json"
 : > "$CLAUDE_FAKE_LOG"                       # capture only the SECOND run's claude calls
 : > "$PACLOG"                                # and only the SECOND run's pacman/sudo calls
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 diff "$h/first.json" "$h/.claude/settings.json" || { echo "FAIL settings not idempotent"; exit 1; }
+diff "$h/first-super.json" "$h/.claude-super/settings.json" || { echo "FAIL super settings not idempotent"; exit 1; }
 diff "$h/first-claudemd.md" "$h/.claude/CLAUDE.md" || { echo "FAIL CLAUDE.md not idempotent"; exit 1; }
 diff "$h/first-manifest.json" "$manifest"       || { echo "FAIL manifest not idempotent"; exit 1; }
 # 2nd run must not re-install the plugin or re-add MCP (stateful fake reflects prior state, finding 7)
