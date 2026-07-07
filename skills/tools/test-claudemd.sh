@@ -7,6 +7,7 @@ chk() { local d="$1"; shift; if "$@"; then printf 'ok   %s\n' "$d"; else printf 
 SB=""; trap '[ -n "$SB" ] && rm -rf "$SB"' EXIT
 mk() { SB="$(mktemp -d)"; export CLAUDEFILES_CLAUDE_MD="$SB/CLAUDE.md"; }
 has_block() { grep -q "claudefiles:codex-review" "$CLAUDEFILES_CLAUDE_MD"; }
+source "$cf/skills/tools/lib/faketools.bash"
 source "$cf/lib/claudemd.sh"
 
 # A: enable on a missing file -> file created with exactly one block
@@ -36,5 +37,21 @@ chk "disable keeps user content"   grep -q "keep me" "$CLAUDEFILES_CLAUDE_MD"
 # E: disable on a missing file is a no-op (does not create it)
 mk; claudemd_apply false
 chk "disable on missing file -> no file" [ ! -e "$CLAUDEFILES_CLAUDE_MD" ]
+
+# personal-style block: add, idempotent, and removable; coexists with codex block
+setup_fixture_home >/dev/null; hp="$HOME"
+export CLAUDEFILES_CLAUDE_MD="$hp/.claude/CLAUDE.md"
+claudemd_personal_apply true
+grep -q "claudefiles:personal" "$hp/.claude/CLAUDE.md" || { echo FAIL personal-missing; exit 1; }
+cp "$hp/.claude/CLAUDE.md" "$hp/first.md"
+claudemd_personal_apply true
+diff "$hp/first.md" "$hp/.claude/CLAUDE.md" || { echo FAIL personal-not-idempotent; exit 1; }
+claudemd_apply true                                  # codex block coexists
+grep -q "claudefiles:personal" "$hp/.claude/CLAUDE.md" || { echo FAIL personal-lost; exit 1; }
+grep -q "claudefiles:codex-review" "$hp/.claude/CLAUDE.md" || { echo FAIL codex-lost; exit 1; }
+claudemd_personal_apply false
+grep -q "claudefiles:personal" "$hp/.claude/CLAUDE.md" && { echo FAIL personal-not-removed; exit 1; }
+grep -q "claudefiles:codex-review" "$hp/.claude/CLAUDE.md" || { echo FAIL codex-collateral; exit 1; }
+unset CLAUDEFILES_CLAUDE_MD
 
 [ "$fails" -eq 0 ] && echo "PASS test-claudemd" || { echo "SOME test-claudemd CASES FAILED"; exit 1; }
