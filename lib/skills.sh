@@ -1,6 +1,6 @@
 # skills.sh — install personal skills into ~/.claude/skills.
 skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_review:true|false>
-  local root="$1" dotnet="${2:-false}" codex_review="${3:-false}" dst="$HOME/.claude/skills"
+  local root="$1" dotnet="${2:-false}" codex_review="${3:-false}" dst="${CLAUDEFILES_TARGET:-$HOME/.claude}/skills"
   mkdir -p "$dst"
   # context7-mcp: real dir (copy) — always
   mkdir -p "$dst/context7-mcp"
@@ -13,7 +13,8 @@ skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_r
     rm -rf "$dst/codex-review"
   fi
   if [ "$dotnet" != true ]; then
-    log "skills installed (context7-mcp); dotnet-router skipped (dotnet disabled)"
+    rm -rf "$dst/dotnet-router"          # symmetric with codex-review: leave no trace on disable
+    log "skills installed (context7-mcp); dotnet-router removed (dotnet disabled)"
     return 0
   fi
   # dotnet-skills clone: the catalog's source of truth. Clone if missing so a FRESH

@@ -35,4 +35,14 @@ skills_apply "$cf" true
 setup_fixture_home >/dev/null; h2="$HOME"; skills_apply "$cf" false
 [ -f "$h2/.claude/skills/context7-mcp/SKILL.md" ] || { echo FAIL c7-off; exit 1; }
 [ -L "$h2/.claude/skills/dotnet-router" ] && { echo FAIL router-should-be-absent; exit 1; }
+# P1a: a PRE-EXISTING dotnet-router symlink is removed when dotnet=false (migration)
+setup_fixture_home >/dev/null; hp="$HOME"
+mkdir -p "$hp/.claude/skills/dotnet-router"
+ln -sfnT "$cf/claude/skills/dotnet-router" "$hp/.claude/skills/dotnet-router" 2>/dev/null || true
+skills_apply "$cf" false false
+[ -e "$hp/.claude/skills/dotnet-router" ] && { echo FAIL dotnet-router-not-removed; exit 1; }
+# target-awareness: skills land in CLAUDEFILES_TARGET
+setup_fixture_home >/dev/null; ht2="$HOME"; alt="$ht2/.claude-super"; mkdir -p "$alt"
+CLAUDEFILES_TARGET="$alt" skills_apply "$cf" false false
+[ -f "$alt/skills/context7-mcp/SKILL.md" ] || { echo FAIL target-skills; exit 1; }
 echo "PASS test-skills"
