@@ -84,11 +84,30 @@ detect-dotnet хук, MCP-набор, codex-наж в `CLAUDE.md`, `effort: xhig
 
 Значение по умолчанию сохраняет текущее поведение для кода, не знающего о профилях.
 
+**`jsonmerge.py` — обобщить (выявлено ревью).** Сейчас он жёстко заточен под super:
+`jsonmerge.py:11` безусловно впрыскивает хук в `hooks.SessionStart[0]`, а `:25-26` берёт все 7
+`MANAGED`-ключей из шаблона (отсутствие любого → `KeyError`). Правки:
+1. Managed-набор берётся из **ключей, присутствующих в шаблоне профиля** (у ванили —
+   `theme`, `statusLine`; `model`/`effort`/`hooks`/`enabledPlugins` она не декларирует).
+2. Ключ из «managed-вселенной», **отсутствующий** в шаблоне, **удаляется** из target (это и
+   даёт one-time cleanup: ваниль без `enabledPlugins`/`hooks` их вычищает).
+3. Впрыск хука — **опционален**: только если профиль объявил `hooks.SessionStart`.
+Замена присутствующих ключей остаётся **wholesale** (не deep-merge) — стейл вложенные ключи не
+выживают. `model`/`effortLevel` в «managed-вселенную ванили» **не входят** (иначе затирались бы
+пользовательские значения при повторном прогоне) — они трогаются только one-time cleanup'ом.
+
+**`skills.sh` — симметричное удаление.** При `dotnet=false` удалять существующий симлинк
+`dotnet-router` (`rm -f`), а не выходить `return 0` без чистки (`skills.sh:15-18`) — как уже
+делает ветка codex-review. Плюс `dst` берётся из `$CLAUDEFILES_TARGET/skills`.
+
 **MCP — пер-профиль.** Каждый рецепт передаёт свой набор серверов (ваниль → `context7`;
 super → его флаги), а манифест сверки `managed-mcp.json` становится **пер-каталог**
 (`managed-mcp.<profile>.json` или файл внутри target-каталога), чтобы `mcp_apply` убирал/добавлял
 ровно серверы этого профиля и не трогал чужие. Иначе один манифест на машину «перетирал» бы
-наборы разных профилей.
+наборы разных профилей. **Миграция (P1b):** для дефолтного каталога, если per-profile манифеста
+ещё нет, а legacy `~/.config/claudefiles/managed-mcp.json` есть — он используется как «прошлый
+манифест», чтобы `mcp_apply` снял старые super-серверы (`mcp.sh:17-19` уже удаляет по ключам
+прошлого манифеста; переиспользуем этот путь).
 
 ### Слой рецептов (подход A)
 
@@ -97,13 +116,20 @@ super → его флаги), а манифест сверки `managed-mcp.json
 
 ```
 config:   спросить, какие профили (vanilla всегда; super y/N; при super — его флаги как сейчас)
+failed=()
 for профиль in выбранные:
-    export CLAUDEFILES_TARGET=<каталог профиля>
-    recipe_<профиль>            # зовёт нужные *_apply
-ensure_credentials_symlink      # для не-дефолтных каталогов
-generate_aliases                # ~/.config/claudefiles/profile-aliases.sh
-readiness_report                # по каждому профилю
+    ( export CLAUDEFILES_TARGET=<каталог профиля>   # SUBSHELL — env не течёт наружу (P2c)
+      export CLAUDE_CONFIG_DIR="$CLAUDEFILES_TARGET"
+      recipe_<профиль> ) || failed+=("$профиль")     # провал одного не рушит остальные (P2b)
+ensure_credentials_symlink      # для не-дефолтных каталогов; считает пути сам, без утечки
+generate_wrappers               # ~/.local/bin/claude-<profile>
+readiness_report                # по каждому профилю + runtime-guard CLAUDE_CONFIG_DIR
+[ ${#failed[@]} -gt 0 ] && exit 1   # non-zero, если упал выбранный профиль (P2b)
 ```
+
+Каждый рецепт — в **subshell**, поэтому `CLAUDEFILES_TARGET`/`CLAUDE_CONFIG_DIR` не утекают в
+пост-цикловые шаги (P2c). Провалы выбранных профилей **агрегируются** → non-zero выход, но
+остальные профили и readiness всё равно отрабатывают (P2b).
 
 Новый профиль = функция `recipe_<name>` + строка в массиве. Файл-модуль: `lib/profiles.sh`.
 
@@ -140,38 +166,63 @@ CLAUDE.md, `model: opus[1m]`, `effort: xhigh`, `theme: dark`, `tui: fullscreen`.
 - **История — раздельная** (свой `history.jsonl` на каталог). Осознанно: контекст super не
   мешается с ванилью. Единую историю при желании даёт такой же симлинк — не в MVP.
 
-### Компонент — переключение (алиасы)
+### Компонент — переключение (wrapper-скрипт, не алиас) — P3
 
-`setup.sh` генерит `~/.config/claudefiles/profile-aliases.sh` (вне git, идемпотентно):
+`setup.sh` генерит **исполняемый wrapper** `~/.local/bin/claude-<profile>` (там уже лежит
+`claude`, PATH настроен), один на каждый не-дефолтный установленный профиль:
 
 ```bash
-alias claude-super='CLAUDE_CONFIG_DIR="$HOME/.claude-super" claude'
+#!/usr/bin/env bash
+exec env CLAUDE_CONFIG_DIR="$HOME/.claude-super" claude "$@"
 ```
 
-Один алиас на каждый не-дефолтный установленный профиль. `setup.sh` печатает строку для
-подключения: `source ~/.config/claudefiles/profile-aliases.sh` (или её подхватывает
-dotfiles-репо через chezmoi). `claude` без env = vanilla.
+Wrapper (в отличие от алиаса) работает в **скриптах, не-интерактивных и свежих шеллах** — «одна
+команда» везде. Генерация идемпотентна (детерминированная перезапись, `chmod +x`). `claude` без
+env = vanilla. Удаление профиля убирает свой wrapper.
 
-## Миграция существующего `~/.claude`
+## Миграция существующего `~/.claude` (уточнено по ревью Codex)
 
-Сейчас `~/.claude` = полный super. После первого прогона нового `setup.sh`:
+Сейчас `~/.claude` = полный super. Merge-only конверсии **недостаточно**: часть super-стейта
+не покрывается управляемыми ключами и осталась бы мусором в ванили. Поэтому вводится **явный
+одноразовый cleanup** дефолтного каталога, срабатывающий при обнаружении super-маркеров
+(`enabledPlugins.superpowers`, detect-dotnet хук, симлинк `dotnet-router`, legacy-манифест MCP).
 
-- Vanilla-рецепт применяется к `~/.claude`: `settings.json` через `jsonmerge.py` заменяет
-  управляемые ключи на ванильные (`enabledPlugins` без superpowers, `hooks` пустой) → инъекция
-  `You have superpowers` и detect-dotnet хук **исчезают сами**.
-- Super ставится заново в `~/.claude-super`.
-- Файлы плагинов в `~/.claude/plugins` остаются на диске (безвредно). Опциональная подчистка —
-  не в MVP.
+Одноразовый cleanup дефолтного `~/.claude` снимает весь managed super-стейт:
+
+| Стейт | Как убирается | Почему merge-only не хватало |
+|-------|---------------|------------------------------|
+| `enabledPlugins` (superpowers/dotnet/codex), detect-dotnet `hooks` | jsonmerge удаляет managed-ключи, отсутствующие в ванильном шаблоне (см. правку jsonmerge) | инъекция/хук уходят, но только если jsonmerge умеет **удалять**, а не только заменять |
+| `model` / `effortLevel` (`opus`/`xhigh`) | one-time удаление при cleanup; далее — не управляются | они user-owned; постоянно управлять ими нельзя — затрём то, что юзер сам выставил |
+| скилл-симлинк `dotnet-router` | `skills.sh` при `dotnet=false` теперь `rm -f` (симметрично codex-review) | сейчас `skills.sh:15-18` делает `return 0` без удаления |
+| codex-наж в `CLAUDE.md` | `claudemd_apply(false)` (уже удаляет блок) + добавляется личный блок ванили | — |
+| MCP-серверы super (playwright/azure/ado…) | дефолтный `mcp_apply` берёт **legacy `managed-mcp.json`** как «прошлый манифест» и снимает его серверы, оставляя только context7 | иначе новый per-profile манифест осиротит старый — серверы останутся |
+| файлы плагинов в `~/.claude/plugins` | **остаются** на диске (отключены настройками, безвредны) | прун файлов — вне MVP (Open Q1) |
+
+**Идемпотентность:** после первого прогона super-маркеров в дефолте нет → cleanup становится
+no-op, и последующие ручные правки `model`/`effortLevel` пользователем **не затираются**.
+
+**Если super не выбран, а super-стейт найден** (P2a): печатается громкий warning, дефолт всё
+равно конвертируется в ваниль (стейт регенерируем, секреты в `secrets.json` целы), с подсказкой
+«перезапусти и выбери super, чтобы вернуть полный стек». Авто-выбора super нет.
+
+Super ставится заново в `~/.claude-super`.
 
 Явный тест миграции: фикстура-`$HOME` с «сегодняшним» `~/.claude` → после setup в `~/.claude`
-нет `enabledPlugins.superpowers` и нет хука, а `~/.claude-super` — полный.
+нет `enabledPlugins.superpowers`, нет хука, нет `dotnet-router`, нет super-MCP, `model`/`effort`
+очищены; а `~/.claude-super` — полный. Второй прогон: заданные вручную `model`/`effort` в ванили
+сохраняются.
 
 ## Обработка ошибок и идемпотентность
 
-- Раскатка каждого профиля независима; ошибка одного → `warn`, остальные продолжают (как
-  сейчас `plugins_apply` под `|| warn`).
-- Повторный `setup.sh` = ноль diff во всех каталогах, выход 0.
-- Симлинк creds и генерация алиасов — идемпотентны (создать-если-нет / переписать-детерминированно).
+- Раскатка каждого профиля независима и в **subshell** (env не течёт, P2c); ошибка одного
+  профиля не рушит остальные, но **агрегируется** → non-zero выход в конце (P2b). Отдельные
+  опциональные под-шаги внутри рецепта остаются мягкими (`|| warn`), как сейчас.
+- Повторный `setup.sh` = ноль diff во всех каталогах; выход 0, если все выбранные профили целы.
+- Симлинк creds и генерация wrapper'ов — идемпотентны (создать-если-нет / детерминированная
+  перезапись). Cleanup дефолта — идемпотентен (после первого прогона super-маркеров нет → no-op).
+- **Runtime-guard `CLAUDE_CONFIG_DIR`** (Open Q2): readiness проверяет, что env реально уважается
+  (напр. `claude plugin list` для super-каталога показывает superpowers, для ванили — нет). Если
+  будущий CC перестанет поддерживать переменную — readiness кричит, а не тихо ломается.
 - Нет TTY при первом конфиге → падение с понятным списком (как сейчас), не зависание.
 
 ## Тестирование
@@ -184,9 +235,26 @@ dotfiles-репо через chezmoi). `claude` без env = vanilla.
 - Vanilla-рецепт: в `settings.json` есть `theme:light` + `statusLine`, нет `enabledPlugins`/
   `hooks`; `CLAUDE.md` содержит личный блок; `model`/`effort` не перетёрты.
 - Super-рецепт: полный стек оказывается в `~/.claude-super`, а не в `~/.claude`.
-- Идемпотентность симлинка creds; генерация алиасов (ровно один алиас на не-дефолтный профиль).
-- Миграция «был super → стал vanilla» в `~/.claude`.
+- Идемпотентность симлинка creds; генерация wrapper'ов (ровно один `~/.local/bin/claude-<p>` на
+  не-дефолтный профиль, исполняемый, с `exec env CLAUDE_CONFIG_DIR=…`).
+- Миграция «был super → стал vanilla» в `~/.claude` (см. ниже — расширенный набор).
 - Инвариант: повторный прогон без diff (расширить существующий `test-setup-idempotent.sh`).
+
+Тесты, добавленные по ревью Codex:
+
+- **jsonmerge**: managed-ключ, отсутствующий в шаблоне профиля, **удаляется** из target; хук
+  впрыскивается только если профиль его объявил; стейл вложенные ключи не выживают (wholesale).
+- **skills.sh**: при `dotnet=false` существующий симлинк `dotnet-router` **удаляется** (P1a).
+- **mcp migration**: при наличии legacy `managed-mcp.json` и отсутствии per-profile манифеста
+  super-серверы (playwright/azure/ado) **снимаются** из дефолта, остаётся только context7 (P1b).
+- **env non-leak**: после цикла рецептов `CLAUDEFILES_TARGET`/`CLAUDE_CONFIG_DIR` не установлены;
+  creds/wrappers/readiness видят чистое окружение (P2c).
+- **failure aggregation**: рецепт выбранного профиля упал → `setup.sh` выходит non-zero, но
+  остальные профили и readiness отработали (P2b).
+- **migration full-sweep**: фикстура «сегодняшний super `~/.claude»` → после setup нет
+  `enabledPlugins.superpowers`, нет detect-dotnet хука, нет `dotnet-router`, нет super-MCP,
+  `model`/`effort` очищены. Второй прогон: вручную выставленные `model`/`effort` в ванили целы.
+- **P2a**: super не выбран, но super-стейт найден → печатается warning и дефолт становится ванилью.
 
 ## Что в git / вне git
 
@@ -194,15 +262,18 @@ dotfiles-репо через chezmoi). `claude` без env = vanilla.
   settings (vanilla + super), `claude/statusline/statusline.sh`, текст личного CLAUDE.md-блока,
   тесты, README.
 - **Вне git (генерится/машинно-специфично):** сами каталоги профилей, `secrets.json`,
-  dotnet-каталог, creds-симлинки, `profile-aliases.sh`.
+  dotnet-каталог, creds-симлинки, wrapper'ы `~/.local/bin/claude-<profile>`.
 
 ## Раскладка (дельта к текущей)
 
 ```
 lib/profiles.sh               # НОВОЕ: список профилей + recipe_vanilla / recipe_super
+lib/py/jsonmerge.py           # правка: per-profile managed-set, удаление отсутствующих ключей, опциональный хук
 lib/settings.sh               # правка: писать в $CLAUDEFILES_TARGET
-lib/skills.sh                 # правка: писать в $CLAUDEFILES_TARGET
-setup.sh                      # правка: меню профилей, цикл по рецептам, creds-симлинк, алиасы
+lib/skills.sh                 # правка: $CLAUDEFILES_TARGET + rm dotnet-router при dotnet=false
+lib/mcp.sh                    # правка: per-profile манифест + потребление legacy-манифеста при миграции
+lib/claudemd.sh               # правка: второй managed-блок (личный стиль ванили)
+setup.sh                      # правка: меню профилей, subshell-цикл, creds-симлинк, wrappers, cleanup, агрегация ошибок
 claude/settings/              # settings.vanilla.template.json + settings.super.template.json (был settings.template.json)
 claude/statusline/statusline.sh   # НОВОЕ
 skills/tools/test-*.sh        # новые/расширенные тесты
