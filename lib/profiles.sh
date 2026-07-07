@@ -45,6 +45,8 @@ ensure_credentials_symlink() { # <target_dir>
   log "linked credentials → $dir/.credentials.json"
 }
 
+_dir_on_path() { case ":$PATH:" in *":$1:"*) return 0 ;; *) return 1 ;; esac; }
+
 _WRAPPER_MARKER="# claudefiles-managed-wrapper"
 generate_wrapper() { # <name> <target_dir>
   local name="$1" dir="$2" bin="$HOME/.local/bin" w
@@ -55,6 +57,10 @@ generate_wrapper() { # <name> <target_dir>
   printf '#!/usr/bin/env bash\n%s\nexec env CLAUDE_CONFIG_DIR=%q claude "$@"\n' "$_WRAPPER_MARKER" "$dir" > "$w"
   chmod +x "$w"
   log "wrapper → $w"
+  # The wrapper is only reachable if its dir is on PATH. With a non-standard $HOME (e.g. a
+  # per-machine home whose PATH points at a different .local/bin) it silently won't be found —
+  # warn with the exact fix instead of leaving the user puzzled. Non-fatal; we don't edit rc files.
+  _dir_on_path "$bin" || warn "$bin is not on \$PATH — 'claude-$name' won't be found in a new shell. Add to your shell rc: export PATH=\"\$HOME/.local/bin:\$PATH\""
 }
 
 provision_selected() { # <repo_root> <profile...>; sets PROVISION_FAILED=(); runs each recipe in a subshell

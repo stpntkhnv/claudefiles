@@ -29,6 +29,14 @@ grep -q 'CLAUDE_CONFIG_DIR=' "$w" || { echo FAIL wrapper-no-env; exit 1; }
 grep -qF "$h/.claude-super" "$w" || { echo FAIL wrapper-no-dir; exit 1; }
 grep -qF "claudefiles-managed-wrapper" "$w" || { echo FAIL wrapper-no-marker; exit 1; }
 
+# PATH visibility: wrapper dir NOT on PATH -> warn with the exact export fix (non-fatal)
+err="$(generate_wrapper super "$h/.claude-super" 2>&1 1>/dev/null)"
+printf '%s' "$err" | grep -qF 'is not on $PATH' || { echo FAIL no-path-warning; exit 1; }
+printf '%s' "$err" | grep -qF 'export PATH="$HOME/.local/bin:$PATH"' || { echo FAIL path-warning-no-fix; exit 1; }
+# ...and SILENT when the dir IS on PATH
+err="$( PATH="$h/.local/bin:$PATH"; generate_wrapper super "$h/.claude-super" 2>&1 1>/dev/null )"
+[ -z "$err" ] || { echo FAIL unexpected-path-warning; exit 1; }
+
 # P2b: an UNMANAGED existing claude-super is not clobbered
 printf '#!/bin/sh\necho MINE\n' > "$h/.local/bin/claude-super"; chmod +x "$h/.local/bin/claude-super"
 generate_wrapper super "$h/.claude-super"
