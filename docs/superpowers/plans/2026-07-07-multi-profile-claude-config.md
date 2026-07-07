@@ -389,6 +389,14 @@ grep -q "mcp add-json --scope user context7" "$CLAUDE_FAKE_LOG" || { echo FAIL n
 : > "$CLAUDE_FAKE_LOG"
 mcp_apply "$van" "$(_mcp_manifest vanilla)"
 grep -q "mcp " "$CLAUDE_FAKE_LOG" && { echo FAIL not-idempotent; exit 1; }
+
+# P1c: manifest already == desired BUT a legacy manifest still lingers (interrupted migration)
+# -> must NOT early-return; must still remove legacy super servers and consume legacy.
+printf '%s' '{"playwright":{"x":1},"context7":{"y":1}}' > "$h/.config/claudefiles/managed-mcp.json"
+: > "$CLAUDE_FAKE_LOG"
+mcp_apply "$van" "$(_mcp_manifest vanilla)" "$(_mcp_legacy)"
+grep -q "mcp remove --scope user playwright" "$CLAUDE_FAKE_LOG" || { echo FAIL legacy-not-swept-when-manifest-current; exit 1; }
+[ -f "$h/.config/claudefiles/managed-mcp.json" ] && { echo FAIL legacy-not-consumed-2; exit 1; }
 echo "PASS test-mcp"
 ```
 
@@ -424,7 +432,8 @@ _mcp_legacy()   { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/man
 mcp_apply() { # mcp_apply <servers_json> <manifest_path> [<prev_manifest_path>]
   local servers="$1" manifest="$2" prev="${3:-$2}"
   local cb; cb="$(claude_bin)"
-  if [ -f "$manifest" ] && \
+  # unchanged AND no pending legacy cleanup -> nothing to do (P1c: don't skip legacy consumption)
+  if [ -f "$manifest" ] && { [ "$prev" = "$manifest" ] || [ ! -f "$prev" ]; } && \
      python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))==json.loads(sys.argv[2]) else 1)' \
         "$manifest" "$servers"; then
     log "MCP servers unchanged"; return 0
@@ -661,7 +670,8 @@ git commit -m "feat(statusline): light-theme status line (model, dir, branch, ct
   - `profile_dir <name>` → `vanilla`→`$HOME/.claude`; else `$HOME/.claude-<name>`.
   - `recipe_vanilla <repo_root>` and `recipe_super <repo_root>`.
   - `ensure_credentials_symlink <target_dir>` — for non-default dirs, symlink `<dir>/.credentials.json` → `$HOME/.claude/.credentials.json` if absent.
-  - `generate_wrapper <name> <target_dir>` — write executable `$HOME/.local/bin/claude-<name>`.
+  - `generate_wrapper <name> <target_dir>` — write executable `$HOME/.local/bin/claude-<name>`, guarded by a managed marker so an unmanaged user file is never clobbered.
+  - `provision_selected <repo_root> <profile...>` — runs each recipe in its own subshell (env cannot leak to the caller), wires creds/wrapper on success, and reports failures via the `PROVISION_FAILED` array.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -697,10 +707,19 @@ w="$h/.local/bin/claude-super"
 [ -x "$w" ] || { echo FAIL wrapper-not-exec; exit 1; }
 grep -q 'CLAUDE_CONFIG_DIR=' "$w" || { echo FAIL wrapper-no-env; exit 1; }
 grep -qF "$h/.claude-super" "$w" || { echo FAIL wrapper-no-dir; exit 1; }
+grep -qF "claudefiles-managed-wrapper" "$w" || { echo FAIL wrapper-no-marker; exit 1; }
 
-# recipe_vanilla writes vanilla settings into the target dir (caller sets env)
-( export CLAUDEFILES_TARGET="$h/.claude"; export CLAUDE_CONFIG_DIR="$h/.claude"
-  recipe_vanilla "$cf" )
+# P2b: an UNMANAGED existing claude-super is not clobbered
+printf '#!/bin/sh\necho MINE\n' > "$h/.local/bin/claude-super"; chmod +x "$h/.local/bin/claude-super"
+generate_wrapper super "$h/.claude-super"
+grep -q "MINE" "$h/.local/bin/claude-super" || { echo FAIL clobbered-unmanaged-wrapper; exit 1; }
+rm -f "$h/.local/bin/claude-super"
+
+# P3: provision_selected runs recipes in subshells; env must NOT leak into THIS shell
+provision_selected "$cf" vanilla
+[ -z "${CLAUDEFILES_TARGET:-}" ] || { echo FAIL target-leaked-into-caller; exit 1; }
+[ -z "${CLAUDE_CONFIG_DIR:-}" ] || { echo FAIL config-dir-leaked-into-caller; exit 1; }
+[ "${#PROVISION_FAILED[@]}" -eq 0 ] || { echo FAIL vanilla-recipe-failed; exit 1; }
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["theme"]=="light";assert "enabledPlugins" not in d;print("ok vanilla-recipe")' "$h/.claude/settings.json"
 [ -f "$h/.claude/skills/context7-mcp/SKILL.md" ] || { echo FAIL vanilla-skill; exit 1; }
 grep -q "claudefiles:personal" "$h/.claude/CLAUDE.md" || { echo FAIL vanilla-claudemd; exit 1; }
@@ -738,9 +757,18 @@ recipe_super() { # <repo_root>
   skills_apply "$root" "$dotnet" "$cr"
   claudemd_apply "$cr"
   claudemd_personal_apply false      # keep super's CLAUDE.md as before (personal block is vanilla-only)
-  plugins_apply "$dotnet" "$cpe" || warn "super: plugin install failed (rest applied)"
+  plugins_apply "$dotnet" "$cpe" || warn "super: plugins_apply reported an error (continuing to verify)"
   local servers; servers="$(python3 "$root/claude/mcp/build_servers.py" "$(config_path)")"
   mcp_apply "$servers" "$(_mcp_manifest super)"
+  # P1a: super counts as successful ONLY if its core plugin is actually installed. plugins_apply
+  # swallows install errors internally, so verify against reality. CLAUDE_CONFIG_DIR is already
+  # exported to the super dir by the caller, so this checks the right profile.
+  if command -v claude >/dev/null 2>&1; then
+    claude plugin list 2>/dev/null | grep -q 'superpowers@' \
+      || { warn "super: superpowers plugin missing after install — marking profile failed"; return 1; }
+  else
+    warn "super: claude not on PATH; cannot verify superpowers install"
+  fi
 }
 
 ensure_credentials_symlink() { # <target_dir>
@@ -753,12 +781,32 @@ ensure_credentials_symlink() { # <target_dir>
   log "linked credentials → $dir/.credentials.json"
 }
 
+_WRAPPER_MARKER="# claudefiles-managed-wrapper"
 generate_wrapper() { # <name> <target_dir>
-  local name="$1" dir="$2" bin="$HOME/.local/bin"
-  mkdir -p "$bin"
-  printf '#!/usr/bin/env bash\nexec env CLAUDE_CONFIG_DIR=%q claude "$@"\n' "$dir" > "$bin/claude-$name"
-  chmod +x "$bin/claude-$name"
-  log "wrapper → $bin/claude-$name"
+  local name="$1" dir="$2" bin="$HOME/.local/bin" w
+  mkdir -p "$bin"; w="$bin/claude-$name"
+  if [ -e "$w" ] && ! grep -qF "$_WRAPPER_MARKER" "$w" 2>/dev/null; then
+    warn "$w exists and is not claudefiles-managed; leaving it untouched (P2b)"; return 0
+  fi
+  printf '#!/usr/bin/env bash\n%s\nexec env CLAUDE_CONFIG_DIR=%q claude "$@"\n' "$_WRAPPER_MARKER" "$dir" > "$w"
+  chmod +x "$w"
+  log "wrapper → $w"
+}
+
+provision_selected() { # <repo_root> <profile...>; sets PROVISION_FAILED=(); runs each recipe in a subshell
+  local root="$1"; shift
+  PROVISION_FAILED=()
+  local p dir
+  for p in "$@"; do
+    dir="$(profile_dir "$p")"
+    log "profile: $p → $dir"
+    if ( export CLAUDEFILES_TARGET="$dir"; export CLAUDE_CONFIG_DIR="$dir"; "recipe_$p" "$root" ); then
+      ensure_credentials_symlink "$dir"
+      [ "$p" != vanilla ] && generate_wrapper "$p" "$dir"
+    else
+      warn "profile '$p' failed to provision"; PROVISION_FAILED+=("$p")
+    fi
+  done
 }
 ```
 
@@ -818,24 +866,31 @@ Keep `context7` + `context7_api_key` OUTSIDE the guard (vanilla uses context7 to
 Replace the phase block (`log "3/9 deps"` … through `log "9/9 verify"` and the lines up to the final `log "Done…"`) with:
 
 ```bash
-log "3/9 deps"
-deps_apply "$(config_flag context7)" "$(config_flag playwright)" "$(config_flag azure_mcp)" \
-           "$(config_flag ado)" "$(config_flag dotnet_skills)" "$(config_flag codex_review)"
+log "deps"
+super_sel=false; [ "$(config_flag profile_super)" = true ] && super_sel=true
+# P1b: deps derived from the SELECTED profiles. Vanilla always ships context7 (needs node/npx);
+# super-only deps stay off unless super is selected, so stale super flags can't drive installs.
+c7_dep=true
+pw_dep=false; az_dep=false; ado_dep=false; dn_dep=false; cr_dep=false
+if [ "$super_sel" = true ]; then
+  pw_dep="$(config_flag playwright)"; az_dep="$(config_flag azure_mcp)"; ado_dep="$(config_flag ado)"
+  dn_dep="$(config_flag dotnet_skills)"; cr_dep="$(config_flag codex_review)"
+fi
+deps_apply "$c7_dep" "$pw_dep" "$az_dep" "$ado_dep" "$dn_dep" "$cr_dep"
+
+# P2a: existing ~/.claude carries the super stack but super was NOT selected -> it will be
+# converted to vanilla. Warn loudly (state is regenerable; secrets are preserved).
+if [ "$super_sel" != true ] && \
+   python3 -c 'import json,sys,os; f=sys.argv[1]; d=json.load(open(f)) if os.path.exists(f) else {}; sys.exit(0 if d.get("enabledPlugins",{}).get("superpowers@claude-plugins-official") else 1)' \
+     "$HOME/.claude/settings.json"; then
+  warn "existing ~/.claude has the super stack but 'super' was not selected — converting it to vanilla. Re-run and choose super to keep the full stack."
+fi
 
 selected=(vanilla)
-[ "$(config_flag profile_super)" = true ] && selected+=(super)
+[ "$super_sel" = true ] && selected+=(super)
 
-failed=()
-for p in "${selected[@]}"; do
-  dir="$(profile_dir "$p")"
-  log "profile: $p → $dir"
-  if ( export CLAUDEFILES_TARGET="$dir"; export CLAUDE_CONFIG_DIR="$dir"; "recipe_$p" "$ROOT" ); then
-    ensure_credentials_symlink "$dir"
-    [ "$p" != vanilla ] && generate_wrapper "$p" "$dir"
-  else
-    warn "profile '$p' failed to provision"; failed+=("$p")
-  fi
-done
+provision_selected "$ROOT" "${selected[@]}"        # subshell loop; recipe_super self-verifies superpowers (P1a)
+failed=("${PROVISION_FAILED[@]}")
 
 log "verify"
 for p in "${selected[@]}"; do
@@ -843,20 +898,14 @@ for p in "${selected[@]}"; do
   python3 -m json.tool "$dir/settings.json" >/dev/null 2>&1 && log "  $p: settings.json valid" \
     || warn "  $p: settings.json invalid"
 done
-# runtime guard: confirm CLAUDE_CONFIG_DIR is honored (super shows superpowers; vanilla does not)
-if [ "$(config_flag profile_super)" = true ] && command -v claude >/dev/null 2>&1; then
-  if CLAUDE_CONFIG_DIR="$(profile_dir super)" claude plugin list 2>/dev/null | grep -q "superpowers@"; then
-    log "  CLAUDE_CONFIG_DIR honored (super has superpowers)"
-  else
-    warn "  CLAUDE_CONFIG_DIR guard: super profile did not report superpowers — check CC version"
-  fi
-fi
 
 if [ "${#failed[@]}" -gt 0 ]; then
   warn "profiles failed: ${failed[*]}"; exit 1
 fi
-log "Done. \`claude\` = vanilla; $( [ "$(config_flag profile_super)" = true ] && echo '`claude-super` = full stack.' )"
+log "Done. \`claude\` = vanilla$( [ "$super_sel" = true ] && printf '%s' '; `claude-super` = full stack' )."
 ```
+
+The old warn-only "runtime guard" is gone on purpose: `recipe_super` now hard-verifies the superpowers plugin (P1a) and returns non-zero if it's missing, so a broken super profile flows into `PROVISION_FAILED` and the non-zero exit — no silent green.
 
 - [ ] **Step 4: Update the phase counter labels (cosmetic)**
 
@@ -910,7 +959,7 @@ printf 'CREDS' > "$h/.claude/.credentials.json"
 mkdir -p "$h/.config/claudefiles"
 printf '%s' '{"playwright":{"x":1},"context7":{"y":1}}' > "$h/.config/claudefiles/managed-mcp.json"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags":{"profile_super":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
+{ "flags":{"profile_super":true,"context7":true,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 
@@ -934,9 +983,8 @@ python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["enabledPlug
 [ -L "$h/.claude-super/.credentials.json" ] || { echo FAIL super-creds; exit 1; }
 [ -x "$h/.local/bin/claude-super" ] || { echo FAIL wrapper; exit 1; }
 
-# env did not leak past the loop
-[ -z "${CLAUDEFILES_TARGET:-}" ] || { echo FAIL target-leaked; exit 1; }
-[ -z "${CLAUDE_CONFIG_DIR:-}" ] || { echo FAIL config-dir-leaked; exit 1; }
+# (env non-leak is proven in-process by test-profiles.sh via provision_selected; a child
+#  `bash setup.sh` cannot leak exports back here regardless, so it is not re-asserted.)
 
 # legacy MCP manifest consumed
 [ -f "$h/.config/claudefiles/managed-mcp.json" ] && { echo FAIL legacy-left; exit 1; }
@@ -949,6 +997,22 @@ cp "$h/.claude-super/settings.json" "$h/super-first.json"
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 diff "$h/super-first.json" "$h/.claude-super/settings.json" || { echo FAIL super-not-idempotent; exit 1; }
 python3 -c 'import json,sys;assert json.load(open(sys.argv[1]))["model"]=="sonnet","user model clobbered"' "$h/.claude/settings.json"
+
+# --- P2a: super stack present but NOT selected -> warn + convert to vanilla, still exit 0 ---
+setup_fixture_home >/dev/null; h2="$HOME"
+cat > "$h2/.claude/settings.json" <<'EOF'
+{ "model":"opus[1m]","enabledPlugins":{"superpowers@claude-plugins-official":true} }
+EOF
+printf 'CREDS' > "$h2/.claude/.credentials.json"
+mkdir -p "$h2/.config/claudefiles"
+cat > "$h2/.config/claudefiles/secrets.json" <<'EOF'
+{ "flags":{"profile_super":false,"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
+  "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
+EOF
+CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive 2> "$h2/err.log"
+grep -q "not selected" "$h2/err.log" || { echo FAIL no-p2a-warning; exit 1; }
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "enabledPlugins" not in d,"super not stripped when declined";print("ok p2a-converted")' "$h2/.claude/settings.json"
+[ -e "$h2/.local/bin/claude-super" ] && { echo FAIL wrapper-when-declined; exit 1; }
 echo "PASS test-multiprofile"
 ```
 
@@ -1017,7 +1081,7 @@ git commit -m "docs: README — multi-profile (vanilla + super) provisioning"
 - Credentials symlink, wrappers, recipes (spec §авторизация, §переключение, §поток) → Task 7. ✓
 - Menu, subshell loop (P2c), failure aggregation (P2b), runtime guard (Open Q2) → Task 8. ✓
 - Migration sweep + model/effort one-time reset + env-non-leak + idempotency (spec §Миграция, §Ошибки) → Tasks 2, 9. ✓
-- P2a (super declined but super-state present): the migration in Task 2 still converts `~/.claude` to vanilla regardless of whether super is selected — covered by the jsonmerge logic; a warning line can be added in Task 8's loop if `profile_super=false` and the pre-run `~/.claude` had `enabledPlugins.superpowers`. **Add this warning in Task 8, Step 3** (checked below).
+- P2a (super declined but super-state present): warning is folded directly into Task 8 Step 3 code, with an integration case in Task 9 (`profile_super=false` → warn + convert). ✓
 - README (spec §Что в git) → Task 10. ✓
 
 **Placeholder scan:** No TBD/TODO; every code step shows full code; test bodies are concrete. ✓
@@ -1031,10 +1095,10 @@ git commit -m "docs: README — multi-profile (vanilla + super) provisioning"
 - `claudemd_apply <enabled>`, `claudemd_personal_apply <enabled>` — Tasks 5, 7 agree. ✓
 - `profile_dir/recipe_vanilla/recipe_super/ensure_credentials_symlink/generate_wrapper` — Tasks 7, 8 agree. ✓
 
-**Fix folded in:** Task 8 Step 3 should also emit a P2a warning. Add, right after `selected=(vanilla)`:
-```bash
-if [ "$(config_flag profile_super)" != true ] && \
-   python3 -c 'import json,sys,os; f=sys.argv[1]; d=json.load(open(f)) if os.path.exists(f) else {}; sys.exit(0 if d.get("enabledPlugins",{}).get("superpowers@claude-plugins-official") else 1)' "$HOME/.claude/settings.json"; then
-  warn "existing ~/.claude has the super stack but 'super' was not selected — converting it to vanilla. Re-run and choose super to keep the full stack."
-fi
-```
+**Codex round-2 fixes folded in:**
+- **P1a** — `recipe_super` (Task 7) hard-verifies the superpowers plugin is installed and `return 1`s if not, so a swallowed plugin-install failure now flows into `PROVISION_FAILED` → non-zero exit. The old warn-only runtime guard is removed.
+- **P1b** — deps in Task 8 are computed from the selected profiles (context7 always on for vanilla; super-only deps off unless super selected).
+- **P1c** — `mcp_apply` (Task 4) early-returns only when `prev == manifest` or `prev` is absent, so a lingering legacy manifest is always consumed; a test covers manifest-current + legacy-present.
+- **P2a** — warning folded into Task 8 Step 3 + integration case in Task 9.
+- **P2b** — `generate_wrapper` (Task 7) refuses to overwrite an unmanaged file (managed marker); test in Task 7.
+- **P3** — the loop is extracted into `provision_selected`; env non-leak is proven in-process in `test-profiles.sh`; the false-positive assertion was removed from `test-multiprofile.sh`.
