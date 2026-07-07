@@ -3,6 +3,11 @@
   "effortLevel": "xhigh",
   "tui": "fullscreen",
   "theme": "dark",
+  "statusLine": {
+    "type": "command",
+    "command": "<STATUSLINE_PATH>",
+    "padding": 2
+  },
   "enabledPlugins": {
     "superpowers@claude-plugins-official": true,
     "dotnet@dotnet-agent-skills": true,

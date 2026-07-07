@@ -15,6 +15,7 @@ python3 - "$h/.claude/settings.json" "$cf" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
 assert d["myCustomKey"]=={"keep":"me"}, "unknown key not preserved"
 assert d["model"]=="opus[1m]" and d["theme"]=="dark" and d["tui"]=="fullscreen"
+assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh", "super statusline not rendered"
 cmd=d["hooks"]["SessionStart"][0]["hooks"][0]["command"]
 assert cmd==f"{cf}/claude/hooks/detect-dotnet.sh", f"hook not rendered: {cmd}"
 assert d["enabledPlugins"].get("dotnet@dotnet-agent-skills") is True
