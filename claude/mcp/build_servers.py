@@ -19,6 +19,13 @@ def chromium_path():                # resolver for the standalone case (finding 
     return shutil.which("chromium") or shutil.which("chromium-browser") or "/usr/bin/chromium"
 
 servers = {}
+profile = sys.argv[2] if len(sys.argv) > 2 else "all"
+if profile == "vanilla":                 # vanilla always ships context7 only, regardless of flags
+    args = ["-y", "@upstash/context7-mcp"]
+    if cfg.get("context7_api_key"):
+        args += ["--api-key", cfg["context7_api_key"]]
+    print(json.dumps({"context7": {"type": "stdio", "command": "npx", "args": args}}))
+    sys.exit(0)
 if on("playwright"):
     servers["playwright"] = {"type":"stdio","command":"npx",
         "args":["-y","@playwright/mcp@latest","--executable-path", chromium_path()]}

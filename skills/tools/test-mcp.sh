@@ -3,37 +3,35 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
 source "$cf/lib/common.sh"; source "$cf/lib/config.sh"; source "$cf/lib/mcp.sh"
+mkdir -p "$h/.config/claudefiles"
 
-# round 1: context7 (free tier) + ado org "old"
-config_set_bool flags.context7 true; config_set context7_api_key ""
-config_set_bool flags.ado true; config_set ado.email me@x.com
-config_set_array ado.orgs "old"
-python3 - <<PY
-import json;p="$(config_path)";d=json.load(open(p))
-d["ado"]["pat"]={"old":"tok1"}; json.dump(d,open(p,"w"))
-PY
-mcp_apply
-grep -q "mcp add-json --scope user context7" "$(fake_claude_calls)" || { echo FAIL add-c7; exit 1; }
-grep -q "azureDevOps-old" "$(fake_claude_calls)" || { echo FAIL add-old; exit 1; }
-manifest="$h/.config/claudefiles/managed-mcp.json"
-grep -q "azureDevOps-old" "$manifest" || { echo FAIL manifest; exit 1; }
-[ "$(stat -c '%a' "$manifest")" = "600" ] || { echo "FAIL manifest perms $(stat -c '%a' "$manifest")"; exit 1; }
+# build_servers vanilla mode = context7 only, even with super flags on
+cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
+{ "flags":{"context7":false,"playwright":true,"azure_mcp":true,"ado":false},"context7_api_key":"" }
+EOF
+van="$(python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" vanilla)"
+echo "$van" | python3 -c 'import json,sys;d=json.load(sys.stdin);assert list(d)==["context7"],d;print("ok vanilla-servers")'
 
-# round 2: drop org "old" -> removed via manifest; an unmanaged user server is never swept
-: > "$(fake_claude_calls)"
-config_set_array ado.orgs ""            # empty -> []
-python3 - <<PY
-import json;p="$(config_path)";d=json.load(open(p))
-d["ado"]["pat"]={}; json.dump(d,open(p,"w"))
-PY
-printf '%s\n' "someUserServer" >> "$CLAUDE_FAKE_STATE/mcp"
-mcp_apply
-grep -q "mcp remove --scope user azureDevOps-old" "$(fake_claude_calls)" || { echo FAIL remove-old; exit 1; }
-grep -q "someUserServer" "$(fake_claude_calls)" && { echo FAIL nuked-user; exit 1; }
-grep -qx "someUserServer" "$CLAUDE_FAKE_STATE/mcp" || { echo "FAIL: unmanaged server was removed"; exit 1; }
+# MIGRATION: legacy manifest lists super servers -> vanilla apply removes them, keeps context7
+printf '%s' '{"playwright":{"x":1},"azure":{"x":1},"context7":{"y":1}}' > "$h/.config/claudefiles/managed-mcp.json"
+: > "$CLAUDE_FAKE_LOG"
+mcp_apply "$van" "$(_mcp_manifest vanilla)" "$(_mcp_legacy)"
+grep -q "mcp remove --scope user playwright" "$CLAUDE_FAKE_LOG" || { echo FAIL no-remove-playwright; exit 1; }
+grep -q "mcp remove --scope user azure"      "$CLAUDE_FAKE_LOG" || { echo FAIL no-remove-azure; exit 1; }
+grep -q "mcp add-json --scope user context7" "$CLAUDE_FAKE_LOG" || { echo FAIL no-add-context7; exit 1; }
+[ -f "$(_mcp_manifest vanilla)" ] || { echo FAIL no-vanilla-manifest; exit 1; }
+[ -f "$h/.config/claudefiles/managed-mcp.json" ] && { echo FAIL legacy-not-consumed; exit 1; }
 
-# round 3: nothing changed -> zero claude calls (finding 7, call-idempotent)
-: > "$(fake_claude_calls)"
-mcp_apply
-[ -s "$(fake_claude_calls)" ] && { echo "FAIL churn on unchanged"; exit 1; }
+# idempotent: same servers, same manifest -> no claude calls
+: > "$CLAUDE_FAKE_LOG"
+mcp_apply "$van" "$(_mcp_manifest vanilla)"
+grep -q "mcp " "$CLAUDE_FAKE_LOG" && { echo FAIL not-idempotent; exit 1; }
+
+# P1c: manifest already == desired BUT a legacy manifest still lingers (interrupted migration)
+# -> must NOT early-return; must still remove legacy super servers and consume legacy.
+printf '%s' '{"playwright":{"x":1},"context7":{"y":1}}' > "$h/.config/claudefiles/managed-mcp.json"
+: > "$CLAUDE_FAKE_LOG"
+mcp_apply "$van" "$(_mcp_manifest vanilla)" "$(_mcp_legacy)"
+grep -q "mcp remove --scope user playwright" "$CLAUDE_FAKE_LOG" || { echo FAIL legacy-not-swept-when-manifest-current; exit 1; }
+[ -f "$h/.config/claudefiles/managed-mcp.json" ] && { echo FAIL legacy-not-consumed-2; exit 1; }
 echo "PASS test-mcp"
