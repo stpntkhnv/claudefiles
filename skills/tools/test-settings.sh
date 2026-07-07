@@ -15,7 +15,7 @@ python3 - "$h/.claude/settings.json" "$cf" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
 assert d["myCustomKey"]=={"keep":"me"}, "unknown key not preserved"
 assert d["model"]=="opus[1m]" and d["theme"]=="dark" and d["tui"]=="fullscreen"
-assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh", "super statusline not rendered"
+assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh super", "super statusline arg not rendered"
 cmd=d["hooks"]["SessionStart"][0]["hooks"][0]["command"]
 assert cmd==f"{cf}/claude/hooks/detect-dotnet.sh", f"hook not rendered: {cmd}"
 assert d["enabledPlugins"].get("dotnet@dotnet-agent-skills") is True
@@ -45,7 +45,7 @@ settings_apply "$VANILLA" false false
 python3 - "$h/.claude/settings.json" "$cf" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
 assert d["theme"]=="light", "vanilla theme not applied"
-assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh", "statusline not rendered"
+assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh vanilla", "vanilla statusline arg not rendered"
 assert "enabledPlugins" not in d, "super plugins not removed"
 assert "hooks" not in d, "stale hook not removed"
 assert "model" not in d and "effortLevel" not in d, "heavy defaults not reset on migration"

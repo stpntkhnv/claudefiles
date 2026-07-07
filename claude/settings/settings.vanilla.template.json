@@ -3,7 +3,7 @@
   "tui": "fullscreen",
   "statusLine": {
     "type": "command",
-    "command": "<STATUSLINE_PATH>",
+    "command": "<STATUSLINE_PATH> vanilla",
     "padding": 2
   }
 }
