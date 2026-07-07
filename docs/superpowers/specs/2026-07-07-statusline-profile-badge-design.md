@@ -11,64 +11,96 @@ profile is active.
 ## Goal
 
 Make the active profile unmistakable at a glance, from inside any session, without
-per-profile duplication.
+per-profile duplication of the statusline logic.
 
 ## Approach
 
 Both profiles' `settings.json` point `statusLine.command` at the same repo file
-(`lib/settings.sh:8` renders `<STATUSLINE_PATH>` to `$repo/claude/statusline/statusline.sh`).
-So a single edit to that shared script fixes both profiles at once.
+(`lib/settings.sh:8,10` renders `<STATUSLINE_PATH>` to
+`$repo/claude/statusline/statusline.sh`). A single edit to that shared script renders
+a profile badge for both profiles.
 
-The reliable runtime signal is `$CLAUDE_CONFIG_DIR`, inherited by the statusline
-process: the `claude-super` wrapper sets it to `~/.claude-super`; plain `claude`
-leaves it unset (defaulting to `~/.claude`). The script derives the profile name from
-it and renders a badge.
+**Profile source (in priority order):**
+
+1. **Explicit argument** — each profile's settings template passes the profile name as
+   the first argument to the command (`<STATUSLINE_PATH> vanilla`, `<STATUSLINE_PATH>
+   super`). This is deterministic and registry-backed: the name is exactly what the
+   profile's recipe wrote, not a guess.
+2. **`$CLAUDE_CONFIG_DIR` fallback** — if no argument is given (e.g. an already-deployed
+   `settings.json` that predates this change), derive the name from the config dir
+   basename. Confirmed inherited by statusline subprocesses in a `claude-super`
+   session, so the badge works even before a `setup.sh` re-run.
+3. **`[unknown]` fallback** — if neither yields a usable name.
+
+Using the explicit argument as the primary source resolves the risk that env is not
+passed to the statusline subprocess (the whole feature would otherwise silently
+recreate the bug), while the env fallback keeps it working with no re-deploy.
 
 ## Change surface
 
-- `claude/statusline/statusline.sh` — detection + render.
+- `claude/statusline/statusline.sh` — profile detection + badge render.
+- `claude/settings/settings.vanilla.template.json` — append ` vanilla` to the
+  `statusLine.command`.
+- `claude/settings/settings.super.template.json` — append ` super` to the
+  `statusLine.command`.
 - `skills/tools/test-statusline.sh` — new cases.
+- `skills/tools/test-settings.sh` — assert the rendered command carries the profile arg.
 
-No changes to `settings.json`, the profile templates, or any `lib/` module.
+No changes to `lib/settings.sh` (its `<STATUSLINE_PATH>` sed leaves the trailing arg
+intact) or any other `lib/` module. A future profile's template carries its own name
+the same way; no parameterization machinery is added now (YAGNI).
 
 ## Detection
 
-Read `$CLAUDE_CONFIG_DIR` and derive the profile name:
+Resolve the profile name:
 
-- empty/unset -> treat as `$HOME/.claude` -> `vanilla`
-- basename `.claude` -> `vanilla`
-- basename `.claude-<name>` -> `<name>` (covers `super` and any future profile)
-- anything else -> basename as-is (fallback; must never crash)
+- `$1` non-empty -> use it (the explicit, registry-backed name).
+- else `$CLAUDE_CONFIG_DIR` (or `$HOME/.claude` if unset): basename `.claude` ->
+  `vanilla`; basename `.claude-<name>` -> `<name>`; anything else -> the basename.
+- Sanitize the resolved name to `[A-Za-z0-9_-]`, cap to a small length (e.g. 16
+  chars). If the result is empty after sanitizing -> `unknown`.
+
+Sanitizing matters because the fallback derives from an environment variable, which
+could carry newlines, ANSI, or absurd length; the badge must stay within the existing
+injection-safe rendering discipline.
 
 ## Render
 
-- Prepend a bold, bracketed badge at the very left of the line, always shown.
+- Prepend a bold, bracketed badge as the very first token of the line, always shown:
+  `[super] …`, `[vanilla] …`.
 - Neutral per-profile color: `vanilla` cyan, `super` magenta, any other profile
-  yellow. Position plus brackets make it distinct regardless of color reuse
-  elsewhere in the line.
+  yellow.
+- Emitted as data via the existing `printf` (never as part of the format string),
+  consistent with the current injection-safe rendering.
 - Example: `[super] Opus 4.8  claudefiles main  ctx 42% · xhigh`.
-
-The badge is emitted as data via the existing `printf` (never as part of the format
-string), consistent with the current injection-safe rendering.
 
 ## Tests
 
-Extend `skills/tools/test-statusline.sh`, driving the profile via the env var:
+`skills/tools/test-statusline.sh` — drive the profile both ways:
 
-- `CLAUDE_CONFIG_DIR=$HOME/.claude-super` -> output contains `[super]`
-- `CLAUDE_CONFIG_DIR=$HOME/.claude` -> output contains `[vanilla]`
-- unset -> output contains `[vanilla]`
-- `CLAUDE_CONFIG_DIR=$HOME/.claude-work` -> output contains `[work]`
+- arg `super` -> badge `[super]`; arg `vanilla` -> `[vanilla]`.
+- no arg, `CLAUDE_CONFIG_DIR=$HOME/.claude-super` -> `[super]`.
+- no arg, `CLAUDE_CONFIG_DIR=$HOME/.claude` -> `[vanilla]`.
+- no arg, unset env -> `[vanilla]`.
+- no arg, `CLAUDE_CONFIG_DIR=$HOME/.claude-work` -> `[work]`.
+- sanitize: a config dir basename with ANSI/newline/over-length content -> badge is a
+  bounded `[A-Za-z0-9_-]` token (or `[unknown]`), no raw control content leaks.
+- placement: strip ANSI from the output and assert the first printable token is
+  exactly `[<profile>]` (guards the "very left, always shown" requirement).
+- existing cases (model/dir/ctx, sparse, type-confused, format-injection) still pass:
+  they call the script with no arg and no profile env, so they render `[vanilla]` and
+  still match their assertions, exit 0, and print no traceback.
 
-Existing cases keep passing: they do not set the env, so they render `[vanilla]` and
-still match the model/dir/ctx assertions. Sparse/type-confused/format-injection cases
-must still exit 0 with no traceback.
+`skills/tools/test-settings.sh` — after rendering each template, assert the
+`statusLine.command` ends with the expected profile arg (`… vanilla`, `… super`).
 
 ## Installation after an existing setup
 
-No re-deploy step: `settings.json` references the repo script directly, so the next
-statusline render runs the new code.
-
-- dev clone: commit the change; a new `claude` session shows the badge.
-- chezmoi external (`~/.local/share/claudefiles`): `chezmoi update` (or git pull
-  there) to land the new HEAD. Re-running `setup.sh` is harmless but not required.
+- The `$CLAUDE_CONFIG_DIR` fallback means the badge appears immediately in a new
+  session with no re-deploy, because `settings.json` already points at the repo script
+  and the env is inherited.
+- To get the deterministic explicit argument, re-run `setup.sh` once so each profile's
+  `settings.json` is regenerated from the updated template. Idempotent; safe to run.
+- dev clone: commit, re-run `./setup.sh`.
+- chezmoi external (`~/.local/share/claudefiles`): `chezmoi update` lands the new HEAD
+  and re-runs `setup.sh` via its trigger.
