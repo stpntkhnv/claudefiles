@@ -17,6 +17,7 @@ echo "$err" | grep -qi "Traceback" && { echo "FAIL traceback-on-type-confusion: 
 out="$(printf '%s' '{"model":{"display_name":"Opus"},"context_window":{"used_percentage":"50%s%s"},"effort":{"level":"high"}}' | bash "$sl")"
 echo "$out" | grep -q "high"   || { echo "FAIL effort-eaten-by-injection: $out"; exit 1; }
 echo "$out" | grep -q "50%s"   && { echo "FAIL raw-injection-leaked: $out"; exit 1; }
+echo "$out" | grep -q "ctx"    && { echo "FAIL ctx-rendered-for-invalid-pct: $out"; exit 1; }
 # a normal numeric percentage still renders NN%
 printf '%s' '{"model":{"display_name":"Opus"},"context_window":{"used_percentage":42}}' | bash "$sl" | grep -q "42%" || { echo "FAIL normal-pct-broken"; exit 1; }
 echo "PASS test-statusline"
