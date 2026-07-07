@@ -1,0 +1,9 @@
+{
+  "theme": "light",
+  "tui": "fullscreen",
+  "statusLine": {
+    "type": "command",
+    "command": "<STATUSLINE_PATH>",
+    "padding": 2
+  }
+}
