@@ -5,7 +5,7 @@
   "theme": "dark",
   "statusLine": {
     "type": "command",
-    "command": "<STATUSLINE_PATH>",
+    "command": "<STATUSLINE_PATH> super",
     "padding": 2
   },
   "enabledPlugins": {
