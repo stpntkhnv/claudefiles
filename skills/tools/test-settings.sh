@@ -18,6 +18,8 @@ assert d["model"]=="opus[1m]" and d["theme"]=="dark" and d["tui"]=="fullscreen"
 assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh super", "super statusline arg not rendered"
 cmd=d["hooks"]["SessionStart"][0]["hooks"][0]["command"]
 assert cmd==f"{cf}/claude/hooks/detect-dotnet.sh", f"hook not rendered: {cmd}"
+assert d["hooks"]["Stop"][0]["hooks"][0]["command"]==f"paplay {cf}/claude/sounds/ready.wav >/dev/null 2>&1", "super Stop sound not rendered"
+assert d["hooks"]["Notification"][0]["hooks"][0]["command"]==f"paplay {cf}/claude/sounds/ready.wav >/dev/null 2>&1", "super Notification sound not rendered"
 assert d["enabledPlugins"].get("dotnet@dotnet-agent-skills") is True
 assert d["enabledPlugins"].get("codex@openai-codex") is True
 print("ok super")
@@ -47,7 +49,9 @@ import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
 assert d["theme"]=="light", "vanilla theme not applied"
 assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh vanilla", "vanilla statusline arg not rendered"
 assert "enabledPlugins" not in d, "super plugins not removed"
-assert "hooks" not in d, "stale hook not removed"
+assert "SessionStart" not in d["hooks"], "stale super SessionStart hook not removed"
+assert set(d["hooks"]) == {"Stop", "Notification"}, "vanilla notification hooks not applied"
+assert d["hooks"]["Stop"][0]["hooks"][0]["command"] == f"paplay {cf}/claude/sounds/ready.wav >/dev/null 2>&1", "sound path not rendered"
 assert "model" not in d and "effortLevel" not in d, "heavy defaults not reset on migration"
 assert d["myCustomKey"]=={"keep":"me"}, "unknown key lost"
 print("ok migration")

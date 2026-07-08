@@ -20,6 +20,12 @@
   "hooks": {
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "<HOOK_PATH>" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "paplay <SOUND_PATH> >/dev/null 2>&1", "async": true } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "paplay <SOUND_PATH> >/dev/null 2>&1", "async": true } ] }
     ]
   }
 }

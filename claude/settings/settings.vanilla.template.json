@@ -5,5 +5,13 @@
     "type": "command",
     "command": "<STATUSLINE_PATH> vanilla",
     "padding": 2
+  },
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "paplay <SOUND_PATH> >/dev/null 2>&1", "async": true } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "paplay <SOUND_PATH> >/dev/null 2>&1", "async": true } ] }
+    ]
   }
 }
