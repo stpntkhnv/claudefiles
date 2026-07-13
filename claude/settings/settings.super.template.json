@@ -2,7 +2,7 @@
   "model": "opus[1m]",
   "effortLevel": "xhigh",
   "tui": "fullscreen",
-  "theme": "dark",
+  "theme": "auto",
   "statusLine": {
     "type": "command",
     "command": "<STATUSLINE_PATH> super",
