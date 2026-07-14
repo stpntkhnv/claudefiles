@@ -25,7 +25,7 @@
    - `plugins` (только рецепт super) — идемпотентно ставит `superpowers@claude-plugins-official` (всегда для super), при `dotnet_skills=true` — `dotnet@dotnet-agent-skills`, при эффективном `codex_review && codex_plugin` — `codex@openai-codex`; добавляет их marketplace при отсутствии (гварды: повторный запуск — no-op).
    - `mcp` — сверяет user-scope MCP-серверы каталога профиля с его собственным манифестом (`managed-mcp.<profile>.json`): vanilla всегда получает только `context7`, super — набор по своим флагам; чужие/неуправляемые серверы не трогает. На дефолтном каталоге первый прогон подхватывает legacy `managed-mcp.json` как «прошлый манифест» и снимает старые super-серверы.
    - после успешного рецепта — симлинк `.credentials.json` и wrapper `~/.local/bin/claude-<profile>` (оба — только для не-дефолтных каталогов).
-5. **verify** — валидирует `settings.json` каждого выбранного профиля и печатает readiness-сводку (`claude`, node+npx, chromium, dotnet, плагины, а при `codex_review` — версия `codex` и статус `codex login`) — не фатально.
+5. **verify** — валидирует `settings.json` каждого выбранного профиля через `python3 -m json.tool`; не фатально.
 
 Провал раскатки одного профиля не рушит остальные, но агрегируется в non-zero выход `setup.sh`. Запущенный дважды `setup.sh` не даёт diff ни в одном каталоге и выходит 0.
 
@@ -40,7 +40,7 @@
 | `.NET SDK` (`dotnet`) | `dotnet-sdk` | C# language server / dotnet-плагин | `dotnet_skills` |
 | `codex` CLI (≥0.142.5) | `npm i -g @openai/codex` | Codex cross-review спек/планов/диффов | `codex_review` |
 
-`claude` CLI фаза не ставит — это задача chezmoi-бутстрапа; preflight предупреждает, а readiness в конце сообщает статус. Проверка `chromium` согласована с резолвером `build_servers.py` (учитывает тот же override `playwright.chromium_path`). Не-Arch (нет `pacman`) — печатается ручная команда, прогон не падает.
+`claude` CLI фаза не ставит — это задача chezmoi-бутстрапа; preflight про это предупреждает, но не падает. Проверка `chromium` согласована с резолвером `build_servers.py` (учитывает тот же override `playwright.chromium_path`). Не-Arch (нет `pacman`) — печатается ручная команда, прогон не падает.
 
 ## Установка
 
