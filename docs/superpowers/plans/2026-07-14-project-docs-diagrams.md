@@ -138,7 +138,6 @@ flowchart LR
   skills["skills.sh"] --> skdir[("skills/*")]
   prof["profiles.sh"] --> wrap["~/.local/bin/claude-<name>"]
   prof --> creds[(".credentials.json симлинк")]
-  secrets -.->|config_get| settings
 ```
 ````
 
