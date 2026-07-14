@@ -1,6 +1,6 @@
 # Схема secrets.json
 
-`~/.config/claudefiles/secrets.json`: единственный persist пользовательских ответов. Владеет им `config_io.py` (пишет с `chmod 600` на создании и на каждой записи, config_io.py:42-44).
+`~/.config/claudefiles/secrets.json`: единственный `persist` пользовательских ответов. Владеет им `config_io.py` (пишет с `chmod 600` на создании и на каждой записи, `config_io.py:42-44`).
 
 ## Ключи
 
@@ -17,4 +17,4 @@
 - **Булевы** эмитятся lowercase (`true`/`false`), чтобы shell-сравнение работало.
 - **Легаси-строка `"true"`** терпится наравне с JSON-bool в MCP-конфиге (build_servers.py:8-10).
 
-Обоснование: config.sh, config_io.py, build_servers.py.
+Обоснование: `config.sh`, `config_io.py`, `build_servers.py`.
