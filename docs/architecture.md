@@ -91,3 +91,37 @@ sequenceDiagram
     U-->>U: warn список + exit 1
   end
 ```
+
+## Рецепты: vanilla vs super
+
+Ключевые отличия: vanilla не зовёт `plugins_apply` и self-verify, передаёт `_mcp_legacy` для consume, personal-блок `CLAUDE.md` включён (у super - выключен).
+
+```mermaid
+flowchart LR
+  subgraph V["recipe_vanilla (~/.claude)"]
+    direction TB
+    v1["settings_apply (vanilla tmpl, dotnet=f, codex=f)"]
+    v2["skills_apply (f, f)"]
+    v3["claudemd_apply false"]
+    v4["claudemd_personal_apply true"]
+    v6["mcp_apply (+ legacy consume)"]
+    v1 --> v2 --> v3 --> v4 --> v6
+  end
+  subgraph S["recipe_super (~/.claude-super)"]
+    direction TB
+    s1["settings_apply (super tmpl, dotnet, cpe)"]
+    s2["skills_apply (dotnet, cr)"]
+    s3["claudemd_apply cr"]
+    s4["claudemd_personal_apply false"]
+    s5["plugins_apply (dotnet, cpe)"]
+    s6["mcp_apply"]
+    s7["self-verify superpowers, только если claude на PATH -> fail if missing"]
+    s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
+  end
+```
+
+## Слои коротко
+
+- Оркестрация (`setup.sh`, `profiles.sh`) знает фазы и рецепты; провижн каждого профиля идёт в субшелле с экспортом `CLAUDEFILES_TARGET` и `CLAUDE_CONFIG_DIR` (profiles.sh:73).
+- Модули-appliers идемпотентны и владеют своим артефактом; `jsonmerge.py`: только логика мёрджа settings, `config_io.py`: только хранилище секретов.
+- Все стора секретов пишутся с `chmod 600` (config_io.py:42-44, mcp.sh).
