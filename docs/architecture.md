@@ -4,7 +4,7 @@
 
 ## Компоненты по слоям
 
-Слои по ответственности, стрелки вниз. `common.sh` — утилиты, доступны всем слоям (не рисуем 8 стрелок). Единственное обратное ребро-исключение помечено пунктиром: `_chromium_present`→`config` (deps.sh:58).
+Слои по ответственности, стрелки вниз. `common.sh`, утилиты, доступны всем слоям (не рисуем 8 стрелок). Единственное обратное ребро-исключение помечено пунктиром: `_chromium_present`→`config` (deps.sh:58).
 
 ```mermaid
 flowchart TD
@@ -39,4 +39,19 @@ flowchart TD
   prof --> config
   config --> configio
   deps -.->|исключение| config
+```
+
+## Потоки данных
+
+Что откуда читается и куда пишется при деплое. Цилиндры - персистентные стора.
+
+```mermaid
+flowchart LR
+  tmpl["settings/*.template.json"] --> settings["settings.sh"] --> setjson[("settings.json")]
+  secrets[("secrets.json")] -->|build_servers.py| mcp["mcp.sh"] --> mcpman[("managed-mcp.*.json")]
+  claudemd["claudemd.sh"] --> cmd[("CLAUDE.md")]
+  skills["skills.sh"] --> skdir[("skills/*")]
+  prof["profiles.sh"] --> wrap["~/.local/bin/claude-<name>"]
+  prof --> creds[(".credentials.json симлинк")]
+  secrets -.->|config_get| settings
 ```
