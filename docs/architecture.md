@@ -57,7 +57,7 @@ flowchart LR
 
 ## Прогон setup.sh
 
-Один деплой сверху вниз. По фичам не фатально (deps, отсутствие `claude`). Фатально: нет `git`/`python3` на preflight (`require_cmd`), нет обязательного конфига без TTY (config.sh:30), exit 1 при упавших профилях (setup.sh:79).
+Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:79-80).
 
 ```mermaid
 sequenceDiagram

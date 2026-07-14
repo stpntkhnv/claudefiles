@@ -17,9 +17,10 @@ flowchart TD
 
   run --> q{"super профиль?"}
   q -->|нет| onlyv["только vanilla"]
-  q -->|да| feats["опрос фич: dotnet, codex, playwright, azure, ADO, context7"]
-  onlyv --> persist
-  feats --> persist[("ответы в secrets.json, повтор не переспрашивает")]
+  q -->|да| feats["опрос super-фич: dotnet, codex, playwright, azure, ADO"]
+  onlyv --> c7{"context7?"}
+  feats --> c7
+  c7 --> persist[("ответы в secrets.json, повтор не переспрашивает")]
 
   persist --> deps["deps: pacman по выбранным фичам"]
   deps --> provision["провижн выбранных профилей"]

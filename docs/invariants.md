@@ -6,7 +6,7 @@
 - **Секреты с `chmod 600`.** `secrets.json` и MCP-манифесты создаются с правами 600. Тесты: `test-config.sh`, `test-mcp.sh`.
 - **Секреты не в `git`.** `secrets.json`, `managed-mcp.json`, `last-applied-head`, `.env` не трекаются. Тест: `test-secrets-not-tracked.sh`.
 - **Изоляция профилей.** Рецепты в субшелле без утечки `env` в вызывающего; отдельный target-каталог. Тесты: `test-profiles.sh`, `test-settings.sh`, `test-skills.sh`.
-- **Миграция super→vanilla полная и одноразовая.** Плагины/хуки/`model`/`effort`/`router`/super-MCP снимаются с дефолтного каталога, пользовательский контент и неизвестные ключи сохраняются. Тесты: `test-multiprofile.sh`, `test-settings.sh`, `test-mcp.sh`.
+- **Миграция super→vanilla полная и одноразовая.** Плагины/хуки/`model`/`effortLevel`/`router`/super-MCP снимаются с дефолтного каталога, пользовательский контент и неизвестные ключи сохраняются. Тесты: `test-multiprofile.sh`, `test-settings.sh`, `test-mcp.sh`.
 - **Неклоббер чужих артефактов.** Немаркированный (не claudefiles) `wrapper` не перезаписывается; символлинк `.credentials.json` идемпотентен: уже существующий остаётся нетронутым. Тест: `test-profiles.sh`.
 - **`Whole-token` матчинг.** Детект плагинов и зависимостей не срабатывает на подстроках. Тесты: `test-deps.sh`, `test-plugins.sh`.
 - **Устойчивость statusline.** Не падает и не даёт трейсбек на битых/инъекционных полях; бейдж всегда крайний слева и санитайзится. Тест: `test-statusline.sh`.
