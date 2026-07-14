@@ -54,3 +54,40 @@ flowchart LR
   prof["profiles.sh"] --> wrap["~/.local/bin/claude-<name>"]
   prof --> creds[(".credentials.json симлинк")]
 ```
+
+## Прогон setup.sh
+
+Один деплой сверху вниз. По фичам не фатально (deps, отсутствие `claude`). Фатально: нет git/python3 на preflight (`require_cmd`), нет обязательного конфига без TTY (config.sh:30), exit 1 при упавших профилях (setup.sh:79).
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as setup.sh
+  participant C as config
+  participant D as deps
+  participant P as provision_selected
+  participant R as recipe_*
+  participant M as модули *_apply
+  Note over U: preflight: git/python3 обязательны (die), нет claude = warn
+  U->>C: config_ensure_all (опрос флагов и секретов)
+  C-->>U: secrets.json
+  U->>D: deps_apply (pacman по флагам)
+  opt зависимость недоступна
+    D-->>U: warn + ручная команда, continue
+  end
+  U->>P: provision_selected(vanilla, super)
+  loop каждый профиль (субшелл: TARGET, CONFIG_DIR)
+    P->>R: recipe_vanilla / recipe_super
+    R->>M: settings, skills, claudemd, [plugins], mcp
+    M-->>R: settings.json, CLAUDE.md, managed-mcp
+    alt рецепт упал
+      R-->>P: fail -> PROVISION_FAILED += профиль
+    else успех
+      R-->>P: ok (+ creds симлинк, wrapper)
+    end
+  end
+  U->>U: verify (json.tool каждого settings.json)
+  opt есть упавшие профили
+    U-->>U: warn список + exit 1
+  end
+```
