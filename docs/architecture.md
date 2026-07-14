@@ -57,7 +57,7 @@ flowchart LR
 
 ## Прогон setup.sh
 
-Один деплой сверху вниз. По фичам не фатально (deps, отсутствие `claude`). Фатально: нет git/python3 на preflight (`require_cmd`), нет обязательного конфига без TTY (config.sh:30), exit 1 при упавших профилях (setup.sh:79).
+Один деплой сверху вниз. По фичам не фатально (deps, отсутствие `claude`). Фатально: нет `git`/`python3` на preflight (`require_cmd`), нет обязательного конфига без TTY (config.sh:30), exit 1 при упавших профилях (setup.sh:79).
 
 ```mermaid
 sequenceDiagram
@@ -124,4 +124,4 @@ flowchart LR
 
 - Оркестрация (`setup.sh`, `profiles.sh`) знает фазы и рецепты; провижн каждого профиля идёт в субшелле с экспортом `CLAUDEFILES_TARGET` и `CLAUDE_CONFIG_DIR` (profiles.sh:73).
 - Модули-appliers идемпотентны и владеют своим артефактом; `jsonmerge.py`: только логика мёрджа settings, `config_io.py`: только хранилище секретов.
-- Все стора секретов пишутся с `chmod 600` (config_io.py:42-44, mcp.sh).
+- Все стора секретов пишутся с `chmod 600` (`config_io.py:42-44`, `mcp.sh:26`).
