@@ -10,12 +10,15 @@ _claudemd_block_apply() { # <begin> <end> <rule> <enabled:true|false>
   # disable + no file -> nothing to do (don't create a spurious file)
   [ "$enabled" != true ] && [ ! -f "$f" ] && return 0
   mkdir -p "$(dirname "$f")"
-  # base = existing content minus our block, with trailing blank lines trimmed
+  # base = existing content minus our block (and the blank separator line our own insert put
+  # immediately before it), with any remaining leading/trailing blank lines trimmed
   local base=""
   [ -f "$f" ] && base="$(awk -v b="$begin" -v e="$end" '
-      $0==b{skip=1;next} $0==e{skip=0;next}
-      !skip{a[++n]=$0; if(NF)last=n}
-      END{for(i=1;i<=last;i++)print a[i]}' "$f")"
+      $0==b{if(n>0 && a[n]=="")n--; skip=1; next} $0==e{skip=0;next}
+      !skip{a[++n]=$0}
+      END{while(n>0 && a[n]=="")n--
+          f=1; while(f<=n && a[f]=="")f++
+          for(i=f;i<=n;i++)print a[i]}' "$f")"
   {
     if [ "$enabled" = true ]; then
       [ -n "$base" ] && printf '%s\n\n' "$base"

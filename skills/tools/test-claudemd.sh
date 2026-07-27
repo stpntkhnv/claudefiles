@@ -92,4 +92,22 @@ claudemd_vision_apply off
 chk "off on missing file -> no file" [ ! -e "$CLAUDEFILES_CLAUDE_MD" ]
 unset CLAUDEFILES_CLAUDE_MD
 
+# regression: recipe_g's exact sequence (codex off, personal on, vision producer) must be
+# idempotent over repeated runs, even with real user content ahead of the blocks. Each block is
+# preceded by a blank separator line that our own insert logic adds; stripping and re-appending a
+# block used to leave that separator behind as part of `base`, so it collided with the next
+# block's own separator into a growing run of blank lines instead of converging (lib/claudemd.sh's
+# awk used to trim only overall leading/trailing blanks, not the block-adjacent one).
+setup_fixture_home >/dev/null; hg="$HOME"
+export CLAUDEFILES_CLAUDE_MD="$hg/.claude/CLAUDE.md"
+printf 'my project notes\n\nsome more notes\n' > "$CLAUDEFILES_CLAUDE_MD"
+claudemd_apply false; claudemd_personal_apply true; claudemd_vision_apply producer
+cp "$CLAUDEFILES_CLAUDE_MD" "$hg/run1.md"
+claudemd_apply false; claudemd_personal_apply true; claudemd_vision_apply producer
+chk "recipe_g sequence idempotent (run1 == run2)" cmp -s "$hg/run1.md" "$CLAUDEFILES_CLAUDE_MD"
+cp "$CLAUDEFILES_CLAUDE_MD" "$hg/run2.md"
+claudemd_apply false; claudemd_personal_apply true; claudemd_vision_apply producer
+chk "recipe_g sequence idempotent (run2 == run3)" cmp -s "$hg/run2.md" "$CLAUDEFILES_CLAUDE_MD"
+unset CLAUDEFILES_CLAUDE_MD
+
 [ "$fails" -eq 0 ] && echo "PASS test-claudemd" || { echo "SOME test-claudemd CASES FAILED"; exit 1; }
