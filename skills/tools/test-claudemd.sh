@@ -54,4 +54,42 @@ grep -q "claudefiles:personal" "$hp/.claude/CLAUDE.md" && { echo FAIL personal-n
 grep -q "claudefiles:codex-review" "$hp/.claude/CLAUDE.md" || { echo FAIL codex-collateral; exit 1; }
 unset CLAUDEFILES_CLAUDE_MD
 
+# vision block: producer/consumer/off, coexisting with the other two blocks
+setup_fixture_home >/dev/null; hv="$HOME"
+export CLAUDEFILES_CLAUDE_MD="$hv/.claude/CLAUDE.md"
+printf 'user notes\n' > "$CLAUDEFILES_CLAUDE_MD"
+
+claudemd_vision_apply producer
+chk "vision producer writes block"   grep -q "claudefiles:vision" "$CLAUDEFILES_CLAUDE_MD"
+chk "vision producer names docs/vision" grep -q "docs/vision/" "$CLAUDEFILES_CLAUDE_MD"
+chk "exactly one vision begin"       [ "$(grep -c '>>> claudefiles:vision >>>' "$CLAUDEFILES_CLAUDE_MD")" -eq 1 ]
+
+cp "$CLAUDEFILES_CLAUDE_MD" "$hv/vision-first.md"
+claudemd_vision_apply producer
+chk "vision producer idempotent"     cmp -s "$hv/vision-first.md" "$CLAUDEFILES_CLAUDE_MD"
+
+claudemd_vision_apply consumer
+chk "consumer replaces in place"     [ "$(grep -c '>>> claudefiles:vision >>>' "$CLAUDEFILES_CLAUDE_MD")" -eq 1 ]
+chk "consumer text differs"          bash -c '! cmp -s "$1" "$CLAUDEFILES_CLAUDE_MD"' _ "$hv/vision-first.md"
+
+# all three blocks coexist
+claudemd_apply true; claudemd_personal_apply true
+chk "three blocks coexist: vision"   grep -q "claudefiles:vision" "$CLAUDEFILES_CLAUDE_MD"
+chk "three blocks coexist: codex"    grep -q "claudefiles:codex-review" "$CLAUDEFILES_CLAUDE_MD"
+chk "three blocks coexist: personal" grep -q "claudefiles:personal" "$CLAUDEFILES_CLAUDE_MD"
+chk "user content still there"       grep -q "user notes" "$CLAUDEFILES_CLAUDE_MD"
+
+claudemd_vision_apply off
+chk "off removes vision"             bash -c '! grep -q "claudefiles:vision" "$CLAUDEFILES_CLAUDE_MD"'
+chk "off keeps codex block"          grep -q "claudefiles:codex-review" "$CLAUDEFILES_CLAUDE_MD"
+chk "off keeps personal block"       grep -q "claudefiles:personal" "$CLAUDEFILES_CLAUDE_MD"
+chk "off keeps user content"         grep -q "user notes" "$CLAUDEFILES_CLAUDE_MD"
+
+# off on a missing file must not create it
+setup_fixture_home >/dev/null; hv2="$HOME"
+export CLAUDEFILES_CLAUDE_MD="$hv2/.claude/CLAUDE.md"
+claudemd_vision_apply off
+chk "off on missing file -> no file" [ ! -e "$CLAUDEFILES_CLAUDE_MD" ]
+unset CLAUDEFILES_CLAUDE_MD
+
 [ "$fails" -eq 0 ] && echo "PASS test-claudemd" || { echo "SOME test-claudemd CASES FAILED"; exit 1; }
