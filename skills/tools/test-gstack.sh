@@ -169,6 +169,34 @@ chk "pinned re-run does not re-install"    [ "$(setup_calls)" -eq "$calls" ]
 chk "pinned re-run stays on the pin" \
   bash -c '[ "$(git -C "$1/skills/gstack" rev-parse HEAD)" = "$2" ]' _ "$hp/.claude-g" "$pin"
 
+# P: a pin may be a tag or a branch, not only a SHA. A tag holds its revision; a branch follows
+# its tip, which is what "pin to a maintained release branch" has to mean.
+git -C "$WORK" tag -f reviewed "$first" >/dev/null 2>&1
+git -C "$WORK" push -q --tags "$BARE" 2>/dev/null || git -C "$WORK" push -q "$BARE" --tags
+setup_fixture_home >/dev/null; ht="$HOME"
+export CLAUDEFILES_TARGET="$ht/.claude-g"
+export GSTACK_FAKE_LOG="$ht/gstack-setup.log"; : > "$GSTACK_FAKE_LOG"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ht/bin/bun"; chmod +x "$ht/bin/bun"; hash -r 2>/dev/null || true
+export CLAUDEFILES_GSTACK_REF="reviewed"
+gstack_apply; rc=$?
+chk "tag pin returns 0"                    [ "$rc" -eq 0 ]
+chk "tag pin lands on the tagged revision" \
+  bash -c '[ "$(git -C "$1/skills/gstack" rev-parse HEAD)" = "$2" ]' _ "$ht/.claude-g" "$first"
+
+setup_fixture_home >/dev/null; hbr="$HOME"
+export CLAUDEFILES_TARGET="$hbr/.claude-g"
+export GSTACK_FAKE_LOG="$hbr/gstack-setup.log"; : > "$GSTACK_FAKE_LOG"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$hbr/bin/bun"; chmod +x "$hbr/bin/bun"; hash -r 2>/dev/null || true
+export CLAUDEFILES_GSTACK_REF="main"
+gstack_apply >/dev/null 2>&1; rc=$?
+chk "branch pin returns 0"                 [ "$rc" -eq 0 ]
+bump_upstream v6
+gstack_apply >/dev/null 2>&1; rc=$?
+chk "branch pin re-run returns 0"          [ "$rc" -eq 0 ]
+chk "branch pin follows the branch tip (origin/main, not a stale local ref)" \
+  bash -c '[ "$(git -C "$1/skills/gstack" rev-parse HEAD)" = "$(git -C "$2" rev-parse HEAD)" ]' _ "$hbr/.claude-g" "$WORK"
+unset CLAUDEFILES_GSTACK_REF
+
 # N: an unresolvable pin fails loudly instead of silently installing upstream HEAD
 setup_fixture_home >/dev/null; hb="$HOME"
 export CLAUDEFILES_TARGET="$hb/.claude-g"
