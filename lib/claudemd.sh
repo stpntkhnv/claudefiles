@@ -11,14 +11,23 @@ _claudemd_block_apply() { # <begin> <end> <rule> <enabled:true|false>
   [ "$enabled" != true ] && [ ! -f "$f" ] && return 0
   mkdir -p "$(dirname "$f")"
   # base = existing content minus our block (and the blank separator line our own insert put
-  # immediately before it), with any remaining leading/trailing blank lines trimmed
+  # immediately before it), with any remaining leading/trailing blank lines trimmed.
+  # A BEGIN with no END is not a block: everything after it is buffered and given back at END,
+  # so a hand-written marker example (or a file left half-written by an older claudefiles) costs
+  # the user nothing.
   local base=""
   [ -f "$f" ] && base="$(awk -v b="$begin" -v e="$end" '
-      $0==b{if(n>0 && a[n]=="")n--; skip=1; next} $0==e{skip=0;next}
-      !skip{a[++n]=$0}
-      END{while(n>0 && a[n]=="")n--
+      $0==b && !skip{if(n>0 && a[n]=="")n--; skip=1; m=0; next}
+      $0==e && skip{skip=0; m=0; next}
+      skip{s[++m]=$0; next}
+      {a[++n]=$0}
+      END{if(skip)for(i=1;i<=m;i++)a[++n]=s[i]
+          while(n>0 && a[n]=="")n--
           f=1; while(f<=n && a[f]=="")f++
           for(i=f;i<=n;i++)print a[i]}' "$f")"
+  # Write via a temp file and rename: an interrupted run must not leave a truncated CLAUDE.md
+  # (that is how an unterminated BEGIN gets created in the first place).
+  local tmp="$f.tmp"
   {
     if [ "$enabled" = true ]; then
       [ -n "$base" ] && printf '%s\n\n' "$base"
@@ -26,7 +35,7 @@ _claudemd_block_apply() { # <begin> <end> <rule> <enabled:true|false>
     else
       [ -n "$base" ] && printf '%s\n' "$base"
     fi
-  } > "$f"
+  } > "$tmp" && mv -f "$tmp" "$f" || { rm -f "$tmp"; warn "claudemd: cannot write $f — left unchanged"; }
   return 0
 }
 

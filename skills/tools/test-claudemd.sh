@@ -8,6 +8,7 @@ SB=""; trap '[ -n "$SB" ] && rm -rf "$SB"' EXIT
 mk() { SB="$(mktemp -d)"; export CLAUDEFILES_CLAUDE_MD="$SB/CLAUDE.md"; }
 has_block() { grep -q "claudefiles:codex-review" "$CLAUDEFILES_CLAUDE_MD"; }
 source "$cf/skills/tools/lib/faketools.bash"
+source "$cf/lib/common.sh"
 source "$cf/lib/claudemd.sh"
 
 # A: enable on a missing file -> file created with exactly one block
@@ -37,6 +38,33 @@ chk "disable keeps user content"   grep -q "keep me" "$CLAUDEFILES_CLAUDE_MD"
 # E: disable on a missing file is a no-op (does not create it)
 mk; claudemd_apply false
 chk "disable on missing file -> no file" [ ! -e "$CLAUDEFILES_CLAUDE_MD" ]
+
+# E2: a BEGIN marker with no END must not swallow the rest of the file. Such a file is reachable
+# two ways: an interrupted earlier write, or a user documenting the marker format by hand.
+mk
+printf 'intro\n\n%s\nstale rule\nMY IMPORTANT NOTES\nMORE NOTES\n' "$_CLAUDEMD_BEGIN" > "$CLAUDEFILES_CLAUDE_MD"
+claudemd_apply true
+chk "unterminated BEGIN keeps the tail"        grep -q "MY IMPORTANT NOTES" "$CLAUDEFILES_CLAUDE_MD"
+chk "unterminated BEGIN keeps the whole tail"  grep -q "MORE NOTES" "$CLAUDEFILES_CLAUDE_MD"
+chk "unterminated BEGIN keeps the head"        grep -qx "intro" "$CLAUDEFILES_CLAUDE_MD"
+chk "recovered file has one begin marker" \
+  [ "$(grep -c '>>> claudefiles:codex-review >>>' "$CLAUDEFILES_CLAUDE_MD")" -eq 1 ]
+chk "recovered file has one end marker" \
+  [ "$(grep -c '<<< claudefiles:codex-review <<<' "$CLAUDEFILES_CLAUDE_MD")" -eq 1 ]
+cp "$CLAUDEFILES_CLAUDE_MD" "$SB/recovered"; claudemd_apply true
+chk "recovered file is idempotent"             cmp -s "$SB/recovered" "$CLAUDEFILES_CLAUDE_MD"
+
+# E3: the write is atomic — a failed write leaves the previous file untouched instead of
+# truncating it (which is what could create the unterminated-BEGIN file above).
+mk; printf 'precious\n' > "$CLAUDEFILES_CLAUDE_MD"
+mkdir "$CLAUDEFILES_CLAUDE_MD.tmp"                     # make the temp write fail
+claudemd_apply true 2>/dev/null
+chk "failed write keeps the previous content"  grep -qx "precious" "$CLAUDEFILES_CLAUDE_MD"
+chk "failed write leaves no half-written block" bash -c '! grep -q "claudefiles:codex-review" "$CLAUDEFILES_CLAUDE_MD"'
+rmdir "$CLAUDEFILES_CLAUDE_MD.tmp"
+claudemd_apply true
+chk "write succeeds again once the path is free" has_block
+chk "no temp file left behind"                 [ ! -e "$CLAUDEFILES_CLAUDE_MD.tmp" ]
 
 # personal-style block: add, idempotent, and removable; coexists with codex block
 setup_fixture_home >/dev/null; hp="$HOME"
