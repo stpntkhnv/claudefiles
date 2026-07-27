@@ -190,10 +190,11 @@ load; export CLAUDEFILES_ASSUME_TTY=1
 deps_apply false false false false false false true <<< "y"
 chk "gstack on -> pacman installs bun" haspac "pacman -S --needed --noconfirm bun" "$PACLOG"
 
-# O: gstack off -> bun never mentioned
+# O: gstack off -> bun never mentioned (log has real content from ctx7, so test has teeth)
 mk_sandbox; fake_pacman; fake_sudo
 load; export CLAUDEFILES_ASSUME_TTY=1
-deps_apply false false false false false false false <<< "y"
+deps_apply true false false false false false false <<< "y"
+chk "gstack off -> pacman called for other deps" bash -c '[ -s "'"$PACLOG"'" ]'
 chk "gstack off -> bun not offered" nogrep_i "bun" "$PACLOG"
 
 # P: bun already present -> nothing offered
