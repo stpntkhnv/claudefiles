@@ -25,7 +25,7 @@ chmod +x "$h/bin/pacman" "$h/bin/sudo"; hash -r 2>/dev/null || true
 # seed non-interactive config so no prompt is needed
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags": {"profile_super":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
+{ "flags": {"profile_super":true,"profile_gstack":false,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive

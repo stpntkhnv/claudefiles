@@ -75,4 +75,42 @@ hash -r 2>/dev/null || true
 
 provision_selected "$cf" super
 printf '%s\n' "${PROVISION_FAILED[@]:-}" | grep -qx super || { echo FAIL p1a-failure-not-recorded; exit 1; }
+
+# --- profile g: dir mapping, recipe writes to ~/.claude-g, gstack failure fails the profile ---
+setup_fixture_home >/dev/null; hg="$HOME"
+unset CLAUDEFILES_CONFIG_DIR; source "$cf/lib/config.sh"   # config.sh recomputes CONFIG_DIR from HOME
+[ "$(profile_dir g)" = "$hg/.claude-g" ] || { echo FAIL dir-g; exit 1; }
+mkdir -p "$hg/.config/claudefiles"
+cat > "$hg/.config/claudefiles/secrets.json" <<'EOF'
+{ "flags":{"profile_gstack":true,"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},"context7_api_key":"" }
+EOF
+
+# gstack_apply is stubbed here: this test owns the WIRING, test-gstack.sh owns the module.
+gstack_apply() { : > "${CLAUDEFILES_TARGET:?}/.gstack-called"; return 0; }
+provision_selected "$cf" g
+[ "${#PROVISION_FAILED[@]}" -eq 0 ] || { echo FAIL g-recipe-failed; exit 1; }
+[ -f "$hg/.claude-g/.gstack-called" ] || { echo FAIL g-gstack-not-called; exit 1; }
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["model"]=="opus[1m]";assert "enabledPlugins" not in d;print("ok g-recipe")' "$hg/.claude-g/settings.json"
+[ -f "$hg/.claude-g/skills/context7-mcp/SKILL.md" ] || { echo FAIL g-skill; exit 1; }
+grep -q "claudefiles:personal" "$hg/.claude-g/CLAUDE.md" || { echo FAIL g-personal; exit 1; }
+grep -q "claudefiles:vision"   "$hg/.claude-g/CLAUDE.md" || { echo FAIL g-vision; exit 1; }
+grep -q "docs/vision/"         "$hg/.claude-g/CLAUDE.md" || { echo FAIL g-vision-path; exit 1; }
+[ -f "$hg/.local/bin/claude-g" ] || { echo FAIL g-wrapper; exit 1; }
+[ -e "$hg/.claude/skills/gstack" ] && { echo FAIL g-leaked-into-default; exit 1; }
+[ -f "$hg/.config/claudefiles/managed-mcp.g.json" ] || { echo FAIL g-mcp-manifest; exit 1; }
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert list(d)==["context7"],d' "$hg/.config/claudefiles/managed-mcp.g.json"
+
+# a failing gstack_apply must fail exactly this profile
+setup_fixture_home >/dev/null; hgf="$HOME"
+unset CLAUDEFILES_CONFIG_DIR; source "$cf/lib/config.sh"   # config.sh recomputes CONFIG_DIR from HOME
+mkdir -p "$hgf/.config/claudefiles"
+cat > "$hgf/.config/claudefiles/secrets.json" <<'EOF'
+{ "flags":{"profile_gstack":true,"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},"context7_api_key":"" }
+EOF
+gstack_apply() { return 1; }
+provision_selected "$cf" vanilla g
+printf '%s\n' "${PROVISION_FAILED[@]:-}" | grep -qx g || { echo FAIL g-failure-not-recorded; exit 1; }
+printf '%s\n' "${PROVISION_FAILED[@]:-}" | grep -qx vanilla && { echo FAIL vanilla-collateral; exit 1; }
+unset -f gstack_apply
+
 echo "PASS test-profiles"

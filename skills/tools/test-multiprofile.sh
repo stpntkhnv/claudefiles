@@ -14,7 +14,7 @@ printf 'CREDS' > "$h/.claude/.credentials.json"
 mkdir -p "$h/.config/claudefiles"
 printf '%s' '{"playwright":{"x":1},"context7":{"y":1}}' > "$h/.config/claudefiles/managed-mcp.json"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags":{"profile_super":true,"context7":true,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
+{ "flags":{"profile_super":true,"profile_gstack":false,"context7":true,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 
@@ -62,11 +62,16 @@ EOF
 printf 'CREDS' > "$h2/.claude/.credentials.json"
 mkdir -p "$h2/.config/claudefiles"
 cat > "$h2/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags":{"profile_super":false,"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
+{ "flags":{"profile_super":false,"profile_gstack":false,"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive 2> "$h2/err.log"
 grep -q "not selected" "$h2/err.log" || { echo FAIL no-p2a-warning; exit 1; }
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "enabledPlugins" not in d,"super not stripped when declined";print("ok p2a-converted")' "$h2/.claude/settings.json"
 [ -e "$h2/.local/bin/claude-super" ] && { echo FAIL wrapper-when-declined; exit 1; }
+
+# profile_gstack=false -> no g dir, no wrapper, and super carries no vision block
+[ -e "$h/.claude-g" ] && { echo FAIL g-dir-created-when-off; exit 1; }
+[ -e "$h/.local/bin/claude-g" ] && { echo FAIL g-wrapper-created-when-off; exit 1; }
+grep -q "claudefiles:vision" "$h/.claude-super/CLAUDE.md" && { echo FAIL super-vision-when-g-off; exit 1; }
 echo "PASS test-multiprofile"
