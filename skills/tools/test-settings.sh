@@ -14,7 +14,7 @@ settings_apply "$SUPER" true true
 python3 - "$h/.claude/settings.json" "$cf" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
 assert d["myCustomKey"]=={"keep":"me"}, "unknown key not preserved"
-assert d["model"]=="opus[1m]" and d["theme"]=="dark" and d["tui"]=="fullscreen"
+assert d["model"]=="opus[1m]" and d["theme"]=="auto" and d["tui"]=="fullscreen"
 assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh super", "super statusline arg not rendered"
 cmd=d["hooks"]["SessionStart"][0]["hooks"][0]["command"]
 assert cmd==f"{cf}/claude/hooks/detect-dotnet.sh", f"hook not rendered: {cmd}"
@@ -46,7 +46,7 @@ EOF
 settings_apply "$VANILLA" false false
 python3 - "$h/.claude/settings.json" "$cf" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
-assert d["theme"]=="light", "vanilla theme not applied"
+assert d["theme"]=="auto", "vanilla theme not applied"
 assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh vanilla", "vanilla statusline arg not rendered"
 assert "enabledPlugins" not in d, "super plugins not removed"
 assert "SessionStart" not in d["hooks"], "stale super SessionStart hook not removed"

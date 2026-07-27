@@ -48,7 +48,7 @@ provision_selected "$cf" vanilla
 [ -z "${CLAUDEFILES_TARGET:-}" ] || { echo FAIL target-leaked-into-caller; exit 1; }
 [ -z "${CLAUDE_CONFIG_DIR:-}" ] || { echo FAIL config-dir-leaked-into-caller; exit 1; }
 [ "${#PROVISION_FAILED[@]}" -eq 0 ] || { echo FAIL vanilla-recipe-failed; exit 1; }
-python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["theme"]=="light";assert "enabledPlugins" not in d;print("ok vanilla-recipe")' "$h/.claude/settings.json"
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["theme"]=="auto";assert "enabledPlugins" not in d;print("ok vanilla-recipe")' "$h/.claude/settings.json"
 [ -f "$h/.claude/skills/context7-mcp/SKILL.md" ] || { echo FAIL vanilla-skill; exit 1; }
 grep -q "claudefiles:personal" "$h/.claude/CLAUDE.md" || { echo FAIL vanilla-claudemd; exit 1; }
 

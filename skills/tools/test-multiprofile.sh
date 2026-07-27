@@ -23,9 +23,10 @@ CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 # vanilla (~/.claude) is clean
 python3 - "$h/.claude/settings.json" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1]))
-assert d["theme"]=="light", d.get("theme")
+assert d["theme"]=="auto", d.get("theme")
 assert "enabledPlugins" not in d, "superpowers not stripped from vanilla"
-assert "hooks" not in d, "stale hook survived in vanilla"
+assert "SessionStart" not in d.get("hooks", {}), "stale hook survived in vanilla"
+assert set(d.get("hooks", {}).keys()) == {"Stop", "Notification"}, "vanilla hooks not applied"
 assert "model" not in d and "effortLevel" not in d, "heavy defaults not reset"
 print("ok vanilla-clean")
 PY
