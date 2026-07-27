@@ -2,7 +2,9 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
-for m in common config settings skills mcp claudemd plugins profiles; do source "$cf/lib/$m.sh"; done
+# gstack is in the list so the stub further down genuinely SHADOWS the real gstack_apply instead
+# of supplying a function that would otherwise not exist here.
+for m in common config settings skills mcp claudemd plugins gstack profiles; do source "$cf/lib/$m.sh"; done
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
 { "flags":{"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},"context7_api_key":"" }
@@ -95,6 +97,10 @@ python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert d["model"]=="o
 grep -q "claudefiles:personal" "$hg/.claude-g/CLAUDE.md" || { echo FAIL g-personal; exit 1; }
 grep -q "claudefiles:vision"   "$hg/.claude-g/CLAUDE.md" || { echo FAIL g-vision; exit 1; }
 grep -q "docs/vision/"         "$hg/.claude-g/CLAUDE.md" || { echo FAIL g-vision-path; exit 1; }
+# the marker and "docs/vision/" appear in BOTH role texts, so pin g to the producer wording:
+# without this, telling profile g to READ vision docs instead of writing them passes unnoticed
+grep -q "owns the VISION stage" "$hg/.claude-g/CLAUDE.md" || { echo FAIL g-vision-role; exit 1; }
+grep -q "turn the vision into a specification" "$hg/.claude-g/CLAUDE.md" && { echo FAIL g-vision-consumer-text; exit 1; }
 [ -f "$hg/.local/bin/claude-g" ] || { echo FAIL g-wrapper; exit 1; }
 [ -e "$hg/.claude/skills/gstack" ] && { echo FAIL g-leaked-into-default; exit 1; }
 [ -f "$hg/.config/claudefiles/managed-mcp.g.json" ] || { echo FAIL g-mcp-manifest; exit 1; }
@@ -111,6 +117,6 @@ gstack_apply() { return 1; }
 provision_selected "$cf" vanilla g
 printf '%s\n' "${PROVISION_FAILED[@]:-}" | grep -qx g || { echo FAIL g-failure-not-recorded; exit 1; }
 printf '%s\n' "${PROVISION_FAILED[@]:-}" | grep -qx vanilla && { echo FAIL vanilla-collateral; exit 1; }
-unset -f gstack_apply
+unset -f gstack_apply; source "$cf/lib/gstack.sh"      # drop the stub, restore the real module
 
 echo "PASS test-profiles"

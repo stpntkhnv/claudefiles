@@ -91,6 +91,10 @@ claudemd_vision_apply producer
 chk "vision producer writes block"   grep -q "claudefiles:vision" "$CLAUDEFILES_CLAUDE_MD"
 chk "vision producer names docs/vision" grep -q "docs/vision/" "$CLAUDEFILES_CLAUDE_MD"
 chk "exactly one vision begin"       [ "$(grep -c '>>> claudefiles:vision >>>' "$CLAUDEFILES_CLAUDE_MD")" -eq 1 ]
+# both role texts carry the marker and "docs/vision/", so pin each role to its own wording
+chk "producer text tells the profile to WRITE" grep -q "owns the VISION stage" "$CLAUDEFILES_CLAUDE_MD"
+chk "producer text is not the consumer text" \
+  bash -c '! grep -q "turn the vision into a specification" "$CLAUDEFILES_CLAUDE_MD"'
 
 cp "$CLAUDEFILES_CLAUDE_MD" "$hv/vision-first.md"
 claudemd_vision_apply producer
@@ -99,6 +103,10 @@ chk "vision producer idempotent"     cmp -s "$hv/vision-first.md" "$CLAUDEFILES_
 claudemd_vision_apply consumer
 chk "consumer replaces in place"     [ "$(grep -c '>>> claudefiles:vision >>>' "$CLAUDEFILES_CLAUDE_MD")" -eq 1 ]
 chk "consumer text differs"          bash -c '! cmp -s "$1" "$CLAUDEFILES_CLAUDE_MD"' _ "$hv/vision-first.md"
+chk "consumer text tells the profile to READ" \
+  grep -q "turn the vision into a specification" "$CLAUDEFILES_CLAUDE_MD"
+chk "consumer text is not the producer text" \
+  bash -c '! grep -q "owns the VISION stage" "$CLAUDEFILES_CLAUDE_MD"'
 
 # all three blocks coexist
 claudemd_apply true; claudemd_personal_apply true

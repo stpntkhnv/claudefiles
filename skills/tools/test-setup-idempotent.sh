@@ -22,10 +22,24 @@ printf 'sudo %s\n' "$*" >> "$PACLOG"
 exec "$@"
 EOF
 chmod +x "$h/bin/pacman" "$h/bin/sudo"; hash -r 2>/dev/null || true
+# Profile g is provisioned for real here: a local bare repo stands in for the gstack upstream and
+# a fake `bun` satisfies the installer's hard requirement, so no network and nothing is installed.
+# Without this, NO test ran recipe_g through setup.sh — dropping `gstack` from setup.sh's module
+# list would have broken nothing in the suite (gstack_apply would be command-not-found, recipe_g
+# would fail the profile, setup.sh would exit 1 and this test would die on its first run).
+GW="$(mktemp -d)"; GBP="$(mktemp -d)"; GB="$GBP/gstack.git"
+trap 'rm -rf "$GW" "$GBP"' EXIT
+git init -q -b main "$GW"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$GW/setup"; chmod +x "$GW/setup"; echo v1 > "$GW/VERSION"
+git -C "$GW" add -A
+git -C "$GW" -c user.email=t@t -c user.name=t commit -qm init
+git clone -q --bare "$GW" "$GB"
+export CLAUDEFILES_GSTACK_REPO="file://$GB"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$h/bin/bun"; chmod +x "$h/bin/bun"; hash -r 2>/dev/null || true
 # seed non-interactive config so no prompt is needed
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags": {"profile_super":true,"profile_gstack":false,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
+{ "flags": {"profile_super":true,"profile_gstack":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
@@ -34,6 +48,8 @@ cp "$h/.claude-super/settings.json" "$h/first-super.json"
 cp "$h/.claude/CLAUDE.md" "$h/first-claudemd.md"
 cp "$h/.claude-super/CLAUDE.md" "$h/first-super-claudemd.md"
 manifest="$h/.config/claudefiles/managed-mcp.vanilla.json"; cp "$manifest" "$h/first-manifest.json"
+cp -a "$h/.claude-g" "$h/first-g"
+g_head="$(git -C "$h/.claude-g/skills/gstack" rev-parse HEAD)"
 : > "$CLAUDE_FAKE_LOG"                       # capture only the SECOND run's claude calls
 : > "$PACLOG"                                # and only the SECOND run's pacman/sudo calls
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
@@ -49,4 +65,22 @@ grep -q "mcp add-json"    "$CLAUDE_FAKE_LOG" && { echo "FAIL re-added MCP on 2nd
 # itself — print manual, never install — is proven in test-deps.sh case D, not re-proven here)
 [ -s "$PACLOG" ] && { echo "FAIL deps phase invoked pacman/sudo in no-TTY"; cat "$PACLOG"; exit 1; }
 python3 -c 'import json,sys;json.load(open(sys.argv[1]))' "$h/.claude/settings.json"
+
+# --- profile g: the headline invariant, whole-directory. The clone itself is excluded because
+# `git reset --hard` appends a reflog entry on every run; its revision and the marker are asserted
+# directly instead, which is what idempotency of the clone actually means.
+diff -r --no-dereference --exclude=gstack "$h/first-g" "$h/.claude-g" \
+  || { echo "FAIL g profile not idempotent"; exit 1; }
+[ "$(git -C "$h/.claude-g/skills/gstack" rev-parse HEAD)" = "$g_head" ] || { echo "FAIL g clone moved"; exit 1; }
+[ "$(cat "$h/.claude-g/.gstack-setup-head")" = "$g_head" ] || { echo "FAIL g marker != clone HEAD"; exit 1; }
+[ -x "$h/.local/bin/claude-g" ] || { echo "FAIL g wrapper missing"; exit 1; }
+[ -e "$h/.claude/skills/gstack" ] && { echo "FAIL gstack leaked into vanilla"; exit 1; }
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert list(d)==["context7"],d' \
+  "$h/.config/claudefiles/managed-mcp.g.json"
+# the vision roles are pinned to their TEXTS: both role strings contain "claudefiles:vision" and
+# "docs/vision/", so grepping those would let a producer/consumer swap through unnoticed
+grep -q "owns the VISION stage" "$h/.claude-g/CLAUDE.md" || { echo "FAIL g is not the vision producer"; exit 1; }
+grep -q "turn the vision into a specification" "$h/.claude-super/CLAUDE.md" || { echo "FAIL super is not the vision consumer"; exit 1; }
+grep -q "turn the vision into a specification" "$h/.claude-g/CLAUDE.md" && { echo "FAIL g carries the consumer text"; exit 1; }
+grep -q "owns the VISION stage" "$h/.claude-super/CLAUDE.md" && { echo "FAIL super carries the producer text"; exit 1; }
 echo "PASS test-setup-idempotent"
