@@ -17,7 +17,7 @@ flowchart TD
     smcp["MCP по флагам: context7, playwright, azure, ADO"]
   end
   subgraph gonly["Только g"]
-    gskills["gstack-скиллы (23, из upstream)"]
+    gskills["gstack-скиллы (23 роли, ~50 файлов)"]
     gmcp["MCP: только context7, безусловно"]
     gnohook["без SessionStart-хука"]
   end
