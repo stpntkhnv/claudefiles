@@ -4,7 +4,7 @@
 
 ## Ключи
 
-- `flags.<name>`: булевы (JSON-bool): `profile_super`, `dotnet_skills`, `codex_review`, `codex_plugin`, `playwright`, `azure_mcp`, `ado`, `context7`.
+- `flags.<name>`: булевы (JSON-bool): `profile_super`, `profile_gstack`, `dotnet_skills`, `codex_review`, `codex_plugin`, `playwright`, `azure_mcp`, `ado`, `context7`.
 - `ado.email`, `ado.orgs` (массив), `ado.pat.<org>` (секрет per-org).
 - `context7_api_key` (секрет, пусто = free tier).
 - `playwright.chromium_path` (override пути к chromium).

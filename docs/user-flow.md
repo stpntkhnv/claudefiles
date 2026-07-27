@@ -18,14 +18,17 @@ flowchart TD
   run --> q{"super профиль?"}
   q -->|нет| onlyv["только vanilla"]
   q -->|да| feats["опрос super-фич: dotnet, codex, playwright, azure, ADO"]
-  onlyv --> c7{"context7?"}
-  feats --> c7
+  onlyv --> g{"g профиль? (profile_gstack)"}
+  feats --> g
+  g --> c7{"context7?"}
   c7 --> persist[("ответы в secrets.json, повтор не переспрашивает")]
 
   persist --> deps["deps: pacman по выбранным фичам"]
   deps --> provision["провижн выбранных профилей"]
   provision --> out1["claude -> vanilla"]
   provision --> out2["claude-super -> super"]
+  provision --> out3["claude-g -> gstack"]
   out1 --> ux1["бейдж в статуслайне, звук хода"]
   out2 --> ux2["бейдж, звук хода, dotnet-nudge в .NET"]
+  out3 --> ux3["бейдж, звук хода, gstack-скиллы"]
 ```
