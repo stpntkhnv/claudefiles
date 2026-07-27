@@ -17,7 +17,10 @@ mk_upstream() {
   git init -q -b main "$WORK"
   cat > "$WORK/setup" <<'EOS'
 #!/usr/bin/env bash
-{ echo "args: $*"; echo "fonts: ${GSTACK_SKIP_FONTS:-unset}"; } >> "${GSTACK_FAKE_LOG:?}"
+# The stdin probe stands in for an upstream prompt: whatever the installer is given as stdin,
+# it reads one line of it. Fed /dev/null it sees EOF; fed a terminal it would block forever.
+if IFS= read -r _line; then _in="stdin: $_line"; else _in="stdin: eof"; fi
+{ echo "args: $*"; echo "fonts: ${GSTACK_SKIP_FONTS:-unset}"; echo "$_in"; } >> "${GSTACK_FAKE_LOG:?}"
 [ "${GSTACK_FAKE_FAIL:-0}" = "1" ] && exit 1
 exit 0
 EOS
@@ -32,7 +35,9 @@ bump_upstream() {   # add a commit and publish it to the bare repo
   git -C "$WORK" -c user.email=t@t -c user.name=t commit -qm "$1"
   git -C "$WORK" push -q origin HEAD 2>/dev/null || git -C "$WORK" push -q "$BARE" HEAD:main
 }
-setup_calls() { grep -c '^args:' "$GSTACK_FAKE_LOG" 2>/dev/null || echo 0; }
+# grep -c already prints 0 on no match (and exits 1), so swallow the status instead of echoing a
+# second 0 — an empty log has to yield one line, not "0\n0".
+setup_calls() { grep -c '^args:' "$GSTACK_FAKE_LOG" 2>/dev/null || true; }
 
 mk_upstream
 setup_fixture_home >/dev/null; h="$HOME"
@@ -50,12 +55,11 @@ chk "marker written"                 [ -s "$h/.claude-g/.gstack-setup-head" ]
 chk "marker equals clone HEAD" \
   bash -c '[ "$(cat "$1/.gstack-setup-head")" = "$(git -C "$1/skills/gstack" rev-parse HEAD)" ]' _ "$h/.claude-g"
 
-# B: installer arguments are pinned
-chk "installer got --host claude"          grep -q -- '--host claude'          "$GSTACK_FAKE_LOG"
-chk "installer got --no-team"              grep -q -- '--no-team'              "$GSTACK_FAKE_LOG"
-chk "installer got --no-plan-tune-hooks"   grep -q -- '--no-plan-tune-hooks'   "$GSTACK_FAKE_LOG"
-chk "installer got -q"                     grep -q -- '-q'                     "$GSTACK_FAKE_LOG"
-chk "fonts install suppressed"             grep -q '^fonts: 1$'                "$GSTACK_FAKE_LOG"
+# B: installer arguments are pinned. Whole-line match on purpose: a substring grep for '-q'
+# matches two characters anywhere, so flag drift on an auto-updating upstream would pass silently.
+chk "installer args are exactly the pinned set" \
+  grep -qxF -- 'args: --host claude --no-team --no-plan-tune-hooks -q' "$GSTACK_FAKE_LOG"
+chk "fonts install suppressed"             grep -qx 'fonts: 1'                 "$GSTACK_FAKE_LOG"
 
 # C: the default profile dir is never touched
 chk "default profile untouched"      [ ! -e "$h/.claude/skills/gstack" ]
@@ -94,6 +98,38 @@ out="$(gstack_apply 2>&1)"; rc=$?
 chk "marker write failure returns 1" [ "$rc" -eq 1 ]
 chk "success line not logged on marker write failure" \
   bash -c '! grep -q "gstack installed" <<<"$1"' _ "$out"
+
+# I: the installer never inherits our stdin. --no-plan-tune-hooks suppresses the one prompt that
+# exists today, but the clone auto-updates: an upstream that renames the flag or adds a prompt must
+# turn setup.sh into a failure, not an indefinite block. A wrong default beats a hang.
+rm -rf "$h/.claude-g/.gstack-setup-head"        # case H left a directory in the marker's place
+bump_upstream v4
+gstack_apply < <(printf 'INHERITED-STDIN\n'); rc=$?
+chk "moved upstream installs again"        [ "$rc" -eq 0 ]
+chk "installer did not read our stdin"     bash -c '! grep -q "INHERITED-STDIN" "$1"' _ "$GSTACK_FAKE_LOG"
+chk "installer saw EOF on stdin" \
+  bash -c '[ "$(grep "^stdin: " "$1" | tail -1)" = "stdin: eof" ]' _ "$GSTACK_FAKE_LOG"
+
+# J: an unreachable upstream must NOT fail a profile that is already at the recorded revision.
+# Offline, `setup.sh` still has to exit 0 (plan Global Constraints).
+clone="$h/.claude-g/skills/gstack"
+git -C "$clone" remote set-url origin "file:///nonexistent/gstack.git"
+calls="$(setup_calls)"
+out="$(gstack_apply 2>&1)"; rc=$?
+chk "offline + matching marker returns 0"  [ "$rc" -eq 0 ]
+chk "offline does not re-run the installer" [ "$(setup_calls)" -eq "$calls" ]
+chk "offline reports the skipped update" \
+  bash -c 'grep -q "keeping the installed revision" <<<"$1"' _ "$out"
+
+# K: an unreachable upstream with a marker that does NOT match is still a failure, and the warn
+# names the remedy for a clone that is broken rather than merely unreachable.
+printf 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' > "$h/.claude-g/.gstack-setup-head"
+out="$(gstack_apply 2>&1)"; rc=$?
+chk "offline + stale marker returns 1"     [ "$rc" -eq 1 ]
+chk "fetch failure names the rm -rf remedy" \
+  bash -c 'grep -qF "rm -rf $2" <<<"$1"' _ "$out" "$clone"
+git -C "$clone" remote set-url origin "file://$BARE"
+gstack_apply >/dev/null 2>&1               # back to a converged clone
 
 unset CLAUDEFILES_TARGET CLAUDEFILES_GSTACK_REPO GSTACK_FAKE_LOG
 [ "$fails" -eq 0 ] && echo "PASS test-gstack" || { echo "SOME test-gstack CASES FAILED"; exit 1; }
