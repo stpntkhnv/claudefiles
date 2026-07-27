@@ -20,7 +20,7 @@ def chromium_path():                # resolver for the standalone case (finding 
 
 servers = {}
 profile = sys.argv[2] if len(sys.argv) > 2 else "all"
-if profile == "vanilla":                 # vanilla always ships context7 only, regardless of flags
+if profile in ("vanilla", "g"):          # vanilla and g always ship context7 only, regardless of flags
     args = ["-y", "@upstash/context7-mcp"]
     if cfg.get("context7_api_key"):
         args += ["--api-key", cfg["context7_api_key"]]

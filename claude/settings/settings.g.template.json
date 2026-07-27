@@ -1,0 +1,19 @@
+{
+  "model": "opus[1m]",
+  "effortLevel": "xhigh",
+  "theme": "auto",
+  "tui": "fullscreen",
+  "statusLine": {
+    "type": "command",
+    "command": "<STATUSLINE_PATH> g",
+    "padding": 2
+  },
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "paplay <SOUND_PATH> >/dev/null 2>&1", "async": true } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "paplay <SOUND_PATH> >/dev/null 2>&1", "async": true } ] }
+    ]
+  }
+}
