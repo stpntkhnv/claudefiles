@@ -35,6 +35,15 @@ claudemd_apply false
 chk "disable removes block"        bash -c '! grep -q "claudefiles:codex-review" "$CLAUDEFILES_CLAUDE_MD"'
 chk "disable keeps user content"   grep -q "keep me" "$CLAUDEFILES_CLAUDE_MD"
 
+# D2: disable on a file that contains ONLY our block — the super->vanilla migration shape, and
+# the one case where the write has nothing at all to print
+mk; claudemd_apply true
+chk "block-only file has the block"  has_block
+claudemd_apply false
+chk "block-only disable removes the block" bash -c '! grep -q "claudefiles:codex-review" "$CLAUDEFILES_CLAUDE_MD"'
+chk "block-only disable empties the file"  [ ! -s "$CLAUDEFILES_CLAUDE_MD" ]
+chk "block-only disable leaves no temp file" [ ! -e "$CLAUDEFILES_CLAUDE_MD.tmp" ]
+
 # E: disable on a missing file is a no-op (does not create it)
 mk; claudemd_apply false
 chk "disable on missing file -> no file" [ ! -e "$CLAUDEFILES_CLAUDE_MD" ]

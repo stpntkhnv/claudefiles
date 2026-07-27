@@ -28,12 +28,15 @@ _claudemd_block_apply() { # <begin> <end> <rule> <enabled:true|false>
   # Write via a temp file and rename: an interrupted run must not leave a truncated CLAUDE.md
   # (that is how an unterminated BEGIN gets created in the first place).
   local tmp="$f.tmp"
+  # `elif` rather than a trailing `[ -n "$base" ] && printf`: with the block disabled and nothing
+  # left to keep, that test is the group's last command and its exit 1 would be read as a write
+  # failure — leaving the block in place on exactly the super->vanilla migration path.
   {
     if [ "$enabled" = true ]; then
       [ -n "$base" ] && printf '%s\n\n' "$base"
       printf '%s\n%s\n%s\n' "$begin" "$rule" "$end"
-    else
-      [ -n "$base" ] && printf '%s\n' "$base"
+    elif [ -n "$base" ]; then
+      printf '%s\n' "$base"
     fi
   } > "$tmp" && mv -f "$tmp" "$f" || { rm -f "$tmp"; warn "claudemd: cannot write $f — left unchanged"; }
   return 0
