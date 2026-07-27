@@ -131,5 +131,57 @@ chk "fetch failure names the rm -rf remedy" \
 git -C "$clone" remote set-url origin "file://$BARE"
 gstack_apply >/dev/null 2>&1               # back to a converged clone
 
+# O: pinning an EXISTING clone works too. The realistic order is "install first, pin later", and
+# an unpinned clone is shallow, so the wanted revision is usually not in it yet.
+first="$(git -C "$WORK" rev-list --max-parents=0 HEAD)"
+chk "existing clone is shallow (case is meaningful)" \
+  bash -c '[ "$(git -C "$1" rev-parse --is-shallow-repository)" = true ]' _ "$clone"
+export CLAUDEFILES_GSTACK_REF="$first"; gstack_apply; rc=$?; unset CLAUDEFILES_GSTACK_REF
+chk "pinning an existing clone returns 0"  [ "$rc" -eq 0 ]
+chk "pinned existing clone moves to the pin" \
+  bash -c '[ "$(git -C "$1" rev-parse HEAD)" = "$2" ]' _ "$clone" "$first"
+chk "pinned existing clone re-ran the installer" \
+  [ "$(cat "$h/.claude-g/.gstack-setup-head")" = "$first" ]
+
+# L: CLAUDEFILES_GSTACK_REF pins a FRESH clone to a reviewed revision, not to upstream HEAD
+pin="$first"                                               # the very first commit (VERSION=v1)
+tip="$(git -C "$WORK" rev-parse HEAD)"
+setup_fixture_home >/dev/null; hp="$HOME"
+export CLAUDEFILES_TARGET="$hp/.claude-g"
+export GSTACK_FAKE_LOG="$hp/gstack-setup.log"; : > "$GSTACK_FAKE_LOG"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$hp/bin/bun"; chmod +x "$hp/bin/bun"; hash -r 2>/dev/null || true
+export CLAUDEFILES_GSTACK_REF="$pin"
+gstack_apply; rc=$?
+chk "pinned install returns 0"             [ "$rc" -eq 0 ]
+chk "pin is not upstream HEAD (case is meaningful)" [ "$pin" != "$tip" ]
+chk "pinned clone sits on the pin, not on upstream HEAD" \
+  bash -c '[ "$(git -C "$1/skills/gstack" rev-parse HEAD)" = "$2" ]' _ "$hp/.claude-g" "$pin"
+chk "pinned worktree carries the pinned content" \
+  bash -c 'grep -qx v1 "$1/skills/gstack/VERSION"' _ "$hp/.claude-g"
+chk "marker records the pin"               [ "$(cat "$hp/.claude-g/.gstack-setup-head")" = "$pin" ]
+
+# M: a pinned re-run stays pinned and does not drift to a moved upstream
+bump_upstream v5
+calls="$(setup_calls)"
+gstack_apply; rc=$?
+chk "pinned re-run returns 0"              [ "$rc" -eq 0 ]
+chk "pinned re-run does not re-install"    [ "$(setup_calls)" -eq "$calls" ]
+chk "pinned re-run stays on the pin" \
+  bash -c '[ "$(git -C "$1/skills/gstack" rev-parse HEAD)" = "$2" ]' _ "$hp/.claude-g" "$pin"
+
+# N: an unresolvable pin fails loudly instead of silently installing upstream HEAD
+setup_fixture_home >/dev/null; hb="$HOME"
+export CLAUDEFILES_TARGET="$hb/.claude-g"
+export GSTACK_FAKE_LOG="$hb/gstack-setup.log"; : > "$GSTACK_FAKE_LOG"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$hb/bin/bun"; chmod +x "$hb/bin/bun"; hash -r 2>/dev/null || true
+export CLAUDEFILES_GSTACK_REF="no-such-revision"
+out="$(gstack_apply 2>&1)"; rc=$?
+chk "unknown pin returns 1"                [ "$rc" -eq 1 ]
+chk "unknown pin never runs the installer" [ "$(setup_calls)" -eq 0 ]
+chk "unknown pin leaves no marker"         [ ! -e "$hb/.claude-g/.gstack-setup-head" ]
+chk "unknown pin is named in the warning" \
+  bash -c 'grep -q "no-such-revision" <<<"$1"' _ "$out"
+unset CLAUDEFILES_GSTACK_REF
+
 unset CLAUDEFILES_TARGET CLAUDEFILES_GSTACK_REPO GSTACK_FAKE_LOG
 [ "$fails" -eq 0 ] && echo "PASS test-gstack" || { echo "SOME test-gstack CASES FAILED"; exit 1; }
