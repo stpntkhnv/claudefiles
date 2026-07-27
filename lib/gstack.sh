@@ -20,8 +20,8 @@ gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/uncha
     git -C "$dst" fetch --depth 1 origin >/dev/null 2>&1 || { warn "gstack: fetch from $repo failed"; return 1; }
     git -C "$dst" reset --hard FETCH_HEAD >/dev/null 2>&1 || { warn "gstack: reset to upstream failed"; return 1; }
   else
-    rm -rf "$dst"                       # drop a partial or non-git leftover
-    mkdir -p "$(dirname "$dst")"
+    rm -rf "$dst" || { warn "gstack: cannot remove stale $dst"; return 1; }   # drop a partial or non-git leftover
+    mkdir -p "$(dirname "$dst")" || { warn "gstack: cannot create $(dirname "$dst")"; return 1; }
     git clone --single-branch --depth 1 "$repo" "$dst" >/dev/null 2>&1 \
       || { warn "gstack: clone of $repo failed"; return 1; }
   fi
@@ -36,7 +36,7 @@ gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/uncha
   # profile. --no-team leaves project repos alone; --no-plan-tune-hooks kills the interactive
   # prompt at setup:1476; GSTACK_SKIP_FONTS=1 kills the sudo pacman font install at setup:312.
   if ( cd "$dst" && GSTACK_SKIP_FONTS=1 ./setup --host claude --no-team --no-plan-tune-hooks -q ); then
-    printf '%s' "$head" > "$marker"
+    printf '%s' "$head" > "$marker" || { warn "gstack: cannot write marker $marker"; return 1; }
     log "gstack installed → $dst ($head)"
     return 0
   fi

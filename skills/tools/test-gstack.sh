@@ -87,5 +87,13 @@ rm -f "$h/bin/bun"; hash -r 2>/dev/null || true
 ( PATH="$h/bin"; gstack_apply ); rc=$?
 chk "missing bun returns 1"          [ "$rc" -eq 1 ]
 
+# H: marker write fails (path replaced by a directory) -> rc 1, success NOT logged
+printf '#!/usr/bin/env bash\nexit 0\n' > "$h/bin/bun"; chmod +x "$h/bin/bun"; hash -r 2>/dev/null || true
+rm -f "$h/.claude-g/.gstack-setup-head"; mkdir -p "$h/.claude-g/.gstack-setup-head"
+out="$(gstack_apply 2>&1)"; rc=$?
+chk "marker write failure returns 1" [ "$rc" -eq 1 ]
+chk "success line not logged on marker write failure" \
+  bash -c '! grep -q "gstack installed" <<<"$1"' _ "$out"
+
 unset CLAUDEFILES_TARGET CLAUDEFILES_GSTACK_REPO GSTACK_FAKE_LOG
 [ "$fails" -eq 0 ] && echo "PASS test-gstack" || { echo "SOME test-gstack CASES FAILED"; exit 1; }
