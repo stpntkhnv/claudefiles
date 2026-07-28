@@ -21,6 +21,8 @@ recipe_super() { # <repo_root>
   skills_apply "$root" "$dotnet" "$cr"
   claudemd_apply "$cr"
   claudemd_personal_apply false      # keep super's CLAUDE.md as before (personal block is vanilla-only)
+  # consume the vision doc only when the profile that produces it is installed
+  if [ "$(config_flag profile_gstack)" = true ]; then claudemd_vision_apply consumer; else claudemd_vision_apply off; fi
   plugins_apply "$dotnet" "$cpe" || warn "super: plugins_apply reported an error (continuing to verify)"
   local servers; servers="$(python3 "$root/claude/mcp/build_servers.py" "$(config_path)")"
   mcp_apply "$servers" "$(_mcp_manifest super)"
@@ -33,6 +35,20 @@ recipe_super() { # <repo_root>
   else
     warn "super: claude not on PATH; cannot verify superpowers install"
   fi
+}
+
+recipe_g() { # <repo_root>  (caller exports CLAUDEFILES_TARGET + CLAUDE_CONFIG_DIR)
+  local root="$1"
+  settings_apply "$root/claude/settings/settings.g.template.json" false false
+  skills_apply "$root" false false
+  claudemd_apply false                 # no codex nudge in the vision profile
+  claudemd_personal_apply true
+  claudemd_vision_apply producer
+  # gstack IS this profile: without it `g` is an empty shell, exactly like super without
+  # superpowers (see the P1a check above). Fail the profile rather than report a hollow success.
+  gstack_apply || { warn "g: gstack_apply failed — marking profile failed"; return 1; }
+  local servers; servers="$(python3 "$root/claude/mcp/build_servers.py" "$(config_path)" g)"
+  mcp_apply "$servers" "$(_mcp_manifest g)"
 }
 
 ensure_credentials_symlink() { # <target_dir>

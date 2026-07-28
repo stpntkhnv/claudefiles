@@ -184,4 +184,31 @@ out="$SB/codex-off.out"
 readiness_report false false false false false false >"$out" 2>&1
 chk "codex flag off -> no codex line" bash -c '! grep -q "codex" "'"$out"'"'
 
+# N: gstack on -> bun is missing on the isolated PATH, so pacman is offered it
+mk_sandbox; fake_pacman; fake_sudo
+load; export CLAUDEFILES_ASSUME_TTY=1
+deps_apply false false false false false false true <<< "y"
+chk "gstack on -> pacman installs bun" haspac "pacman -S --needed --noconfirm bun" "$PACLOG"
+
+# O: gstack off -> bun never mentioned (log has real content from ctx7, so test has teeth)
+mk_sandbox; fake_pacman; fake_sudo
+load; export CLAUDEFILES_ASSUME_TTY=1
+deps_apply true false false false false false false <<< "y"
+chk "gstack off -> pacman called for other deps" bash -c '[ -s "'"$PACLOG"'" ]'
+chk "gstack off -> bun not offered" nogrep_i "bun" "$PACLOG"
+
+# P: bun already present -> nothing offered
+mk_sandbox; fake_pacman; fake_sudo; present bun
+load; export CLAUDEFILES_ASSUME_TTY=1
+deps_apply false false false false false false true <<< "y"
+chk "bun present -> pacman not called" isempty "$PACLOG"
+
+# Q: the seventh parameter keeps the non-fatal contract; the legacy 6-arg call still works
+mk_sandbox; fake_pacman; fake_sudo
+load; export CLAUDEFILES_ASSUME_TTY=0
+( set -e; deps_apply false false false false false false true ); rc=$?
+chk "7-arg deps_apply returns 0 under set -e" [ "$rc" -eq 0 ]
+( set -e; deps_apply false false false false false false ); rc=$?
+chk "6-arg legacy call still returns 0"       [ "$rc" -eq 0 ]
+
 [ "$fails" -eq 0 ] && echo "PASS test-deps" || { echo "SOME test-deps CASES FAILED"; exit 1; }

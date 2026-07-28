@@ -2,7 +2,7 @@
 # Install the full ~/.claude config on this machine. Idempotent; the update path too.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for m in common config deps settings skills plugins mcp claudemd profiles; do source "$ROOT/lib/$m.sh"; done
+for m in common config deps settings skills plugins mcp claudemd gstack profiles; do source "$ROOT/lib/$m.sh"; done
 
 log "preflight"; require_cmd git; require_cmd python3
 command -v claude >/dev/null 2>&1 || warn "claude not on PATH yet (install it, then re-run)"
@@ -36,6 +36,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
       done
     fi
   fi
+  config_ensure_flag profile_gstack "Install the 'g' profile (gstack, vision stage)? (y/N)"
   config_ensure_flag context7      "Enable Context7 MCP? (y/N)"
   if [ "$(config_flag context7)" = true ]; then
     config_ensure_optional context7_api_key "Context7 API key (empty = free tier)" --secret
@@ -45,6 +46,7 @@ config_ensure_all
 
 log "deps"
 super_sel=false; [ "$(config_flag profile_super)" = true ] && super_sel=true
+g_sel=false;     [ "$(config_flag profile_gstack)" = true ] && g_sel=true
 # P1b: deps derived from the SELECTED profiles. Vanilla always ships context7 (needs node/npx);
 # super-only deps stay off unless super is selected, so stale super flags can't drive installs.
 c7_dep=true
@@ -53,7 +55,7 @@ if [ "$super_sel" = true ]; then
   pw_dep="$(config_flag playwright)"; az_dep="$(config_flag azure_mcp)"; ado_dep="$(config_flag ado)"
   dn_dep="$(config_flag dotnet_skills)"; cr_dep="$(config_flag codex_review)"
 fi
-deps_apply "$c7_dep" "$pw_dep" "$az_dep" "$ado_dep" "$dn_dep" "$cr_dep"
+deps_apply "$c7_dep" "$pw_dep" "$az_dep" "$ado_dep" "$dn_dep" "$cr_dep" "$g_sel"
 
 # P2a: existing ~/.claude carries the super stack but super was NOT selected -> it will be
 # converted to vanilla. Warn loudly (state is regenerable; secrets are preserved).
@@ -65,6 +67,7 @@ fi
 
 selected=(vanilla)
 [ "$super_sel" = true ] && selected+=(super)
+[ "$g_sel" = true ] && selected+=(g)
 
 provision_selected "$ROOT" "${selected[@]}"        # subshell loop; recipe_super self-verifies superpowers (P1a)
 failed=("${PROVISION_FAILED[@]}")
@@ -79,4 +82,4 @@ done
 if [ "${#failed[@]}" -gt 0 ]; then
   warn "profiles failed: ${failed[*]}"; exit 1
 fi
-log "Done. \`claude\` = vanilla$( [ "$super_sel" = true ] && printf '%s' '; `claude-super` = full stack' )."
+log "Done. \`claude\` = vanilla$( [ "$super_sel" = true ] && printf '%s' '; `claude-super` = full stack' )$( [ "$g_sel" = true ] && printf '%s' '; `claude-g` = gstack (vision)' )."

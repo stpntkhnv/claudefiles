@@ -22,6 +22,7 @@ flowchart TD
     plugins["plugins.sh"]
     mcp["mcp.sh"]
     claudemd["claudemd.sh"]
+    gstack["gstack.sh"]
   end
   subgraph cfg["Хранилище конфига"]
     config["config.sh"]
@@ -35,6 +36,7 @@ flowchart TD
   setup --> deps
   setup --> config
   prof --> settings & skills & plugins & mcp & claudemd
+  prof --> gstack
   settings --> jsonmerge
   prof --> config
   config --> configio
@@ -53,11 +55,12 @@ flowchart LR
   skills["skills.sh"] --> skdir[("skills/*")]
   prof["profiles.sh"] --> wrap["~/.local/bin/claude-<name>"]
   prof --> creds[(".credentials.json симлинк")]
+  gstack["gstack.sh"] --> gclone[("skills/gstack + .gstack-setup-head")]
 ```
 
 ## Прогон setup.sh
 
-Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:79-80).
+Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:82-83).
 
 ```mermaid
 sequenceDiagram
@@ -75,11 +78,12 @@ sequenceDiagram
   opt зависимость недоступна
     D-->>U: warn + ручная команда, continue
   end
-  U->>P: provision_selected(vanilla, super)
+  U->>P: provision_selected(vanilla, super, g)
   loop каждый профиль (субшелл: TARGET, CONFIG_DIR)
-    P->>R: recipe_vanilla / recipe_super
-    R->>M: settings, skills, claudemd, [plugins], mcp
+    P->>R: recipe_vanilla / recipe_super / recipe_g
+    R->>M: settings, skills, claudemd, [plugins], [gstack], mcp
     M-->>R: settings.json, CLAUDE.md, managed-mcp
+    Note over R: recipe_g падает, если упал gstack_apply
     alt рецепт упал
       R-->>P: fail -> PROVISION_FAILED += профиль
     else успех
@@ -92,9 +96,9 @@ sequenceDiagram
   end
 ```
 
-## Рецепты: vanilla vs super
+## Рецепты: vanilla vs super vs g
 
-Ключевые отличия: vanilla не зовёт `plugins_apply` и self-verify, передаёт `_mcp_legacy` для consume, personal-блок `CLAUDE.md` включён (у super - выключен).
+Ключевые отличия: vanilla не зовёт `plugins_apply` и self-verify, передаёт `_mcp_legacy` для consume, personal-блок `CLAUDE.md` включён (у super - выключен). g тоже не зовёт `plugins_apply` и self-verify, но вместо них зовёт `gstack_apply` и пишет vision-блок в роли producer; personal-блок у g включён, как у vanilla.
 
 ```mermaid
 flowchart LR
@@ -118,10 +122,21 @@ flowchart LR
     s7["self-verify superpowers, только если claude на PATH -> fail if missing"]
     s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
   end
+  subgraph G["recipe_g (~/.claude-g)"]
+    direction TB
+    g1["settings_apply (g tmpl)"]
+    g2["skills_apply (f, f)"]
+    g3["claudemd_apply false"]
+    g4["claudemd_personal_apply true"]
+    g5["claudemd_vision_apply producer"]
+    g6["gstack_apply"]
+    g7["mcp_apply"]
+    g1 --> g2 --> g3 --> g4 --> g5 --> g6 --> g7
+  end
 ```
 
 ## Слои коротко
 
-- Оркестрация (`setup.sh`, `profiles.sh`) знает фазы и рецепты; провижн каждого профиля идёт в субшелле с экспортом `CLAUDEFILES_TARGET` и `CLAUDE_CONFIG_DIR` (profiles.sh:73).
+- Оркестрация (`setup.sh`, `profiles.sh`) знает фазы и рецепты; провижн каждого профиля идёт в субшелле с экспортом `CLAUDEFILES_TARGET` и `CLAUDE_CONFIG_DIR` (profiles.sh:89).
 - Модули-appliers идемпотентны и владеют своим артефактом; `jsonmerge.py`: только логика мёрджа settings, `config_io.py`: только хранилище секретов.
 - Все стора секретов пишутся с `chmod 600` (`config_io.py:42-44`, `mcp.sh:26`).

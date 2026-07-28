@@ -14,7 +14,7 @@ settings_apply "$SUPER" true true
 python3 - "$h/.claude/settings.json" "$cf" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
 assert d["myCustomKey"]=={"keep":"me"}, "unknown key not preserved"
-assert d["model"]=="opus[1m]" and d["theme"]=="dark" and d["tui"]=="fullscreen"
+assert d["model"]=="opus[1m]" and d["theme"]=="auto" and d["tui"]=="fullscreen"
 assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh super", "super statusline arg not rendered"
 cmd=d["hooks"]["SessionStart"][0]["hooks"][0]["command"]
 assert cmd==f"{cf}/claude/hooks/detect-dotnet.sh", f"hook not rendered: {cmd}"
@@ -46,7 +46,7 @@ EOF
 settings_apply "$VANILLA" false false
 python3 - "$h/.claude/settings.json" "$cf" <<'PY'
 import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
-assert d["theme"]=="light", "vanilla theme not applied"
+assert d["theme"]=="auto", "vanilla theme not applied"
 assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh vanilla", "vanilla statusline arg not rendered"
 assert "enabledPlugins" not in d, "super plugins not removed"
 assert "SessionStart" not in d["hooks"], "stale super SessionStart hook not removed"
@@ -73,4 +73,34 @@ PY
 alt="$h/.claude-super"; mkdir -p "$alt"
 CLAUDEFILES_TARGET="$alt" settings_apply "$SUPER" false false
 [ -f "$alt/settings.json" ] || { echo FAIL target-not-written; exit 1; }
+
+# --- profile g: vanilla-shaped base plus the heavy model, no plugin machinery ---
+setup_fixture_home >/dev/null; hg="$HOME"
+G="$cf/claude/settings/settings.g.template.json"
+CLAUDEFILES_TARGET="$hg/.claude-g" settings_apply "$G" false false
+python3 - "$hg/.claude-g/settings.json" "$cf" <<'PY'
+import json,sys; d=json.load(open(sys.argv[1])); cf=sys.argv[2]
+assert d["model"]=="opus[1m]", d.get("model")
+assert d["effortLevel"]=="xhigh", d.get("effortLevel")
+assert d["theme"]=="auto" and d["tui"]=="fullscreen"
+assert d["statusLine"]["command"]==f"{cf}/claude/statusline/statusline.sh g", d["statusLine"]["command"]
+assert "enabledPlugins" not in d, "g must not enable plugins"
+assert "extraKnownMarketplaces" not in d, "g must not add marketplaces"
+assert set(d["hooks"]) == {"Stop", "Notification"}, d.get("hooks")
+assert d["hooks"]["Stop"][0]["hooks"][0]["command"] == f"paplay {cf}/claude/sounds/ready.wav >/dev/null 2>&1"
+print("ok profile-g settings")
+PY
+
+# --- profile g MCP: context7 only, regardless of super-only flags ---
+printf '%s' '{"flags":{"playwright":true,"azure_mcp":true,"context7":false}}' > "$hg/secrets.json"
+python3 - "$cf" "$hg/secrets.json" <<'PY'
+import json,subprocess,sys
+cf, cfg = sys.argv[1], sys.argv[2]
+out = subprocess.run(["python3", f"{cf}/claude/mcp/build_servers.py", cfg, "g"],
+                     capture_output=True, text=True, check=True).stdout
+d = json.loads(out)
+assert list(d) == ["context7"], d
+print("ok profile-g mcp")
+PY
+
 echo "PASS test-settings"

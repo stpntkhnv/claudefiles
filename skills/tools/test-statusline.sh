@@ -49,4 +49,11 @@ out="$(printf '%s' "$j" | bash "$sl" super)"
 stripped="$(printf '%s' "$out" | sed 's/\x1b\[[0-9;]*m//g')"
 [ "${stripped%% *}" = "[super]" ] || { echo "FAIL badge-not-leftmost: $stripped"; exit 1; }
 
+# --- profile g renders its own badge colour, not the unknown-profile fallback ---
+gcol="$(printf '%s' "$j" | bash "$sl" g   | sed -n 's/^\(\x1b\[[0-9;]*m\)\[g\].*/\1/p')"
+xcol="$(printf '%s' "$j" | bash "$sl" zzz | sed -n 's/^\(\x1b\[[0-9;]*m\)\[zzz\].*/\1/p')"
+[ -n "$gcol" ] || { echo "FAIL g-badge-missing"; exit 1; }
+[ -n "$xcol" ] || { echo "FAIL unknown-badge-missing"; exit 1; }
+[ "$gcol" != "$xcol" ] || { echo "FAIL g-badge-uses-unknown-colour"; exit 1; }
+
 echo "PASS test-statusline"

@@ -12,6 +12,10 @@ setup_fixture_home() {
   local h; h="$(mktemp -d)"
   mkdir -p "$h/.claude" "$h/.config"
   export HOME="$h"
+  # The claudefiles wrapper exports CLAUDE_CONFIG_DIR, so the suite may be run from inside a
+  # non-default profile. A fixture must never inherit it: modules under test would write to
+  # the developer's real profile dir instead of the fixture.
+  unset CLAUDE_CONFIG_DIR
   export CLAUDE_FAKE_LOG="$h/.claude-calls.log"; : > "$CLAUDE_FAKE_LOG"
   export CLAUDE_FAKE_STATE="$h/.claude-state"; mkdir -p "$CLAUDE_FAKE_STATE"
   : > "$CLAUDE_FAKE_STATE/plugins"; : > "$CLAUDE_FAKE_STATE/marketplaces"; : > "$CLAUDE_FAKE_STATE/mcp"

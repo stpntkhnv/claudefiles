@@ -52,6 +52,7 @@ prof="$(printf '%s' "$prof" | tr -cd 'A-Za-z0-9_-' | cut -c1-16)"; [ -z "$prof" 
 case "$prof" in
   vanilla) pcol=$'\033[1;36m' ;;
   super)   pcol=$'\033[1;35m' ;;
+  g)       pcol=$'\033[1;32m' ;;
   *)       pcol=$'\033[1;33m' ;;
 esac
 badge="${pcol}[${prof}]"$'\033[0m'" "

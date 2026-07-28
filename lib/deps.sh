@@ -64,8 +64,8 @@ _chromium_present() {  # honors the same playwright.chromium_path override as bu
   return 1
 }
 
-deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> — offer-install each needed dep; always 0
-  local ctx7="${1:-false}" pw="${2:-false}" azure="${3:-false}" ado="${4:-false}" dotnet="${5:-false}" codex="${6:-false}"
+deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> <gstack> — offer-install each needed dep; always 0
+  local ctx7="${1:-false}" pw="${2:-false}" azure="${3:-false}" ado="${4:-false}" dotnet="${5:-false}" codex="${6:-false}" gstack="${7:-false}"
   if [ "$ctx7" = true ] || [ "$pw" = true ] || [ "$azure" = true ] || [ "$ado" = true ]; then
     dep_require "MCP servers (npx-based)" node npx -- nodejs npm
   fi
@@ -78,6 +78,9 @@ deps_apply() {   # <ctx7> <playwright> <azure> <ado> <dotnet> <codex> — offer-
   if [ "$codex" = true ]; then
     dep_require "Codex CLI runtime (node/npx)" node npx -- nodejs npm
     _codex_ok || warn "codex CLI missing or < 0.142.5 — install/upgrade: npm install -g @openai/codex"
+  fi
+  if [ "$gstack" = true ]; then
+    dep_require "gstack installer (its setup exits without bun)" bun -- bun
   fi
   return 0     # explicit — a disabled feature must not make this non-zero under set -e (finding 1)
 }
