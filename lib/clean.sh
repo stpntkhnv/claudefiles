@@ -56,3 +56,41 @@ clean_preflight() {   # hard gates: a cleaned profile is rebuilt from the networ
     || die "clean install needs network: github is unreachable and a cleaned profile is rebuilt from it (override: CLAUDEFILES_CLEAN_SKIP_NET=1)"
   return 0
 }
+
+clean_backup_open() {   # [<stamp>] — open the run's backup dir. die on failure: the confirmation
+                        # plus this backup ARE the safety net of the mode.
+  local stamp="${1:-$(date +%Y%m%d-%H%M%S)}"
+  # config.sh:6 already normalises CLAUDEFILES_CONFIG_DIR at source time, so re-declaring its
+  # default here would be a second copy of the same fact.
+  local dir="$CLAUDEFILES_CONFIG_DIR/clean-backups/$stamp"
+  mkdir -p "$dir" || die "clean: cannot create backup dir $dir"
+  chmod 700 "$dir" || die "clean: cannot chmod 700 $dir"
+  export CLAUDEFILES_CLEAN_BACKUP="$dir"
+  log "clean: backup → $dir"
+}
+
+clean_backup_take() {   # <src> <rel_dest> — copy into the backup preserving modes. A missing src
+                        # is normal (nothing to keep); a FAILED copy is fatal, never a warning.
+  local src="$1" rel="$2" dst
+  [ -e "$src" ] || [ -L "$src" ] || return 0
+  [ -n "${CLAUDEFILES_CLEAN_BACKUP:-}" ] || die "clean: backup dir not open (call clean_backup_open first)"
+  dst="$CLAUDEFILES_CLEAN_BACKUP/$rel"
+  mkdir -p "$(dirname "$dst")" || die "clean: cannot create $(dirname "$dst")"
+  # rm first: `cp -a src dir` where dir already exists copies INTO it, which would nest a second
+  # copy on a repeated take instead of replacing the first.
+  rm -rf "$dst" || die "clean: cannot remove existing backup at $dst"
+  cp -a "$src" "$dst" || die "clean: backup of $src failed — refusing to delete anything"
+  return 0
+}
+
+clean_global() {   # phase A: the stored answers and the MCP manifests. Runs BEFORE config_ensure_all,
+                   # so the run re-asks everything instead of wiping answers it just collected.
+  local f mdir; mdir="$(_clean_manifest_dir)"
+  clean_backup_take "$(config_path)" "global/secrets.json"
+  for f in "$mdir"/managed-mcp*.json; do
+    [ -e "$f" ] || continue
+    clean_backup_take "$f" "global/$(basename "$f")"
+  done
+  rm -f "$(config_path)" "$mdir"/managed-mcp*.json
+  log "clean: stored answers and MCP manifests wiped"
+}
