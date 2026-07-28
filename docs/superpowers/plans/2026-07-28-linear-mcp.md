@@ -163,8 +163,8 @@ git commit -m "feat(linear): сервер linear в build_servers.py по фла
 
 **Interfaces:**
 - Consumes: `claude_bin` (`lib/common.sh:6`), `config_flag` и `_has_tty` (`lib/config.sh:15-20`), `log`/`warn` (`lib/common.sh:2-3`).
-- Produces: `mcp_linear_login <profile>` — всегда `return 0`. Зовёт `claude mcp login linear` тогда и только тогда, когда `flags.linear` истинный, CLI доступен, `claude mcp get linear` печатает `Needs authentication`, и `_has_tty` истинный. Задача 4 зовёт её из `setup.sh`.
-- Produces (тест-харнесс): фейковый `claude` понимает `mcp get <name>` (печатает статус; `CLAUDE_FAKE_MCP_AUTH=ok` переключает на «авторизован») и `mcp login <name>` (пишет в лог строку `mcp login <name> CLAUDE_CONFIG_DIR=<dir>`).
+- Produces: `mcp_linear_login <profile>` — всегда `return 0`. Зовёт `claude mcp login linear` тогда и только тогда, когда `flags.linear` истинный, CLI доступен, `claude mcp get linear` вышел с нулём и напечатал `Needs authentication`, и `_has_tty` истинный. Задача 4 зовёт её из `setup.sh`.
+- Produces (тест-харнесс): фейковый `claude` понимает `mcp get <name>` (три исхода: `Needs authentication` по умолчанию, `Connected` при `CLAUDE_FAKE_MCP_AUTH=ok`, ненулевой код если сервера нет в состоянии фейка) и `mcp login <name>` (пишет в лог строку `mcp login <name> CLAUDE_CONFIG_DIR=<dir>`).
 
 - [ ] **Step 1: Научить фейковый `claude` двум подкомандам**
 
@@ -184,10 +184,10 @@ fi
 И добавить в `case "$1 $2" in` (перед строкой `*) : ;;`) две ветки:
 
 ```bash
-  "mcp get")            # mirrors real `claude mcp get <name>`: unknown server -> non-zero
+  "mcp get")            # the three real outcomes: needs auth, connected, no such server (non-zero)
     if grep -qxF "$3" "$S/mcp" 2>/dev/null; then
       printf '%s:\n  Scope: User config (available in all your projects)\n' "$3"
-      if [ "${CLAUDE_FAKE_MCP_AUTH:-needs}" = ok ]; then printf '  Status: connected\n'
+      if [ "${CLAUDE_FAKE_MCP_AUTH:-needs}" = ok ]; then printf '  Status: ✔ Connected\n'
       else printf '  Status: ! Needs authentication\n'; fi
     else
       printf 'No MCP server found with name: %s\n' "$3"; exit 1
@@ -195,6 +195,9 @@ fi
   "mcp login")          # logged above, including CLAUDE_CONFIG_DIR; nothing else to do
     : ;;
 ```
+
+Формулировки статусов взяты с живого `claude mcp get` (2.1.220), а не придуманы: `Status: ✔ Connected`
+на рабочем сервере, `Status: ! Needs authentication` на неавторизованном.
 
 - [ ] **Step 2: Написать падающие проверки**
 
@@ -224,11 +227,14 @@ CLAUDEFILES_ASSUME_TTY=0 mcp_linear_login vanilla 2> "$h/linear-notty.log"
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-without-tty; exit 1; }
 grep -q "claude mcp login linear" "$h/linear-notty.log" || { echo FAIL no-manual-hint-without-tty; exit 1; }
 
-# сервера нет в конфиге -> `mcp get` возвращает ненулевой код; функция не роняет прогон под set -e
+# дрейф: манифест на месте, сервера в конфиге нет -> `mcp get` ненулевой. Не логинить, не падать,
+# но и не молчать: молчание тут означало бы отрапортовать успех при неработающем Linear.
 "$cb" mcp remove --scope user linear >/dev/null 2>&1 || true
 : > "$CLAUDE_FAKE_LOG"
-CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla || { echo FAIL login-nonzero-on-missing-server; exit 1; }
+CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla 2> "$h/linear-missing.log" \
+  || { echo FAIL login-nonzero-on-missing-server; exit 1; }
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-on-missing-server; exit 1; }
+grep -q "claude mcp login linear" "$h/linear-missing.log" || { echo FAIL no-warn-on-missing-server; exit 1; }
 echo "ok linear-login-gate"
 ```
 
@@ -242,26 +248,35 @@ Expected: FAIL с `mcp_linear_login: command not found` (тест запущен
 Дописать в конец `lib/mcp.sh`:
 
 ```bash
-# Linear is the only managed server that needs an interactive OAuth login: add-json puts it in
-# the config, `claude mcp login` makes it usable. Gated on the CLI positively reporting that auth
-# is needed — if that wording ever changes we degrade to "do nothing", not to "open a browser on
-# every run". Never fatal: setup.sh runs under set -e and a browser flow must not fail a profile.
+# Linear is the only managed server that needs an interactive OAuth login: add-json puts it in the
+# config, `claude mcp login` makes it usable. The browser is opened only on a POSITIVE signal, but
+# no branch here is silent: an unknown status (wording changed, server failed) warns instead of
+# returning quietly, or a future CLI rename would switch the login off unnoticed. A non-zero
+# `mcp get` means the server is missing from this profile while its manifest still lists it, so
+# mcp_apply took the unchanged early-return (mcp.sh:9-13) — report the drift, don't paper over it.
+# Never fatal: setup.sh runs under set -e and a browser flow must not fail a profile.
 mcp_linear_login() { # mcp_linear_login <profile>
-  local profile="$1" cb status
+  local profile="$1" cb status rc=0 fix="run: claude mcp login linear"
   [ "$(config_flag linear)" = true ] || return 0
   cb="$(claude_bin)"
   if [ ! -x "$cb" ] && ! command -v "$cb" >/dev/null 2>&1; then
-    warn "linear ($profile): claude not available — run later: claude mcp login linear"; return 0
+    warn "linear ($profile): claude not available — $fix"; return 0
   fi
-  status="$(timeout 30 "$cb" mcp get linear 2>&1 || true)"   # network call; || true: unknown server exits non-zero
-  case "$status" in *"Needs authentication"*) ;; *) return 0 ;; esac
-  if _has_tty; then
-    log "linear ($profile): opening browser to authenticate"
-    timeout 300 "$cb" mcp login linear \
-      || warn "linear ($profile): login failed — run manually: claude mcp login linear"
-  else
-    warn "linear ($profile): not authenticated — run: claude mcp login linear"
+  status="$(timeout 30 "$cb" mcp get linear 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "linear ($profile): not in this profile's config — re-run ./setup.sh, then $fix"; return 0
   fi
+  case "$status" in
+    *"Needs authentication"*)
+      if _has_tty; then
+        log "linear ($profile): opening browser to authenticate"
+        timeout 300 "$cb" mcp login linear || warn "linear ($profile): login failed — $fix"
+      else
+        warn "linear ($profile): not authenticated — $fix"
+      fi ;;
+    *Connected*) : ;;
+    *) warn "linear ($profile): unexpected status from 'claude mcp get linear' — $fix" ;;
+  esac
   return 0
 }
 ```
@@ -414,11 +429,32 @@ CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null
   || { echo FAIL no-linear-login-in-super; exit 1; }
 [ "$(grep -cF "mcp login linear" "$CLAUDE_FAKE_LOG")" = 2 ] \
   || { echo FAIL linear-login-count; exit 1; }
+# без этого предыдущие ассерты вакуумны: состояние фейкового claude одно на фикстур-HOME, поэтому
+# `mcp get linear` в super ответит «есть» даже если сервер добавили только в vanilla. Манифесты
+# профилей — настоящие раздельные файлы, и вот они это различают.
+for m in vanilla super; do
+  python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "linear" in d,(sys.argv[1],d)' \
+    "$h3/.config/claudefiles/managed-mcp.$m.json" || { echo "FAIL linear-missing-in-$m-manifest"; exit 1; }
+done
 
 # уже авторизован -> ни одного логина: защита от «браузер на каждом прогоне»
 : > "$CLAUDE_FAKE_LOG"
 CLAUDE_FAKE_MCP_AUTH=ok CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL linear-login-when-authed; exit 1; }
+
+# флаг обратно в false -> сервер снимается со всех выбранных профилей и логина нет.
+# Ветка vanilla/g в build_servers.py перестала быть терминальной именно этой задачей, поэтому
+# снятие проверяется сквозным прогоном, а не только юнит-тестами mcp_apply.
+python3 "$cf/lib/py/config_io.py" setbool "$h3/.config/claudefiles/secrets.json" flags.linear false
+: > "$CLAUDE_FAKE_LOG"
+CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null
+grep -q "mcp remove --scope user linear" "$CLAUDE_FAKE_LOG" || { echo FAIL linear-not-removed; exit 1; }
+grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL linear-login-after-disable; exit 1; }
+for m in vanilla super; do
+  python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "linear" not in d,(sys.argv[1],d)' \
+    "$h3/.config/claudefiles/managed-mcp.$m.json" || { echo "FAIL linear-left-in-$m-manifest"; exit 1; }
+done
+python3 "$cf/lib/py/config_io.py" setbool "$h3/.config/claudefiles/secrets.json" flags.linear true
 
 # упавший профиль -> setup.sh уходит в exit 1 ДО фазы логина
 : > "$CLAUDE_FAKE_LOG"
@@ -554,15 +590,15 @@ Linear единственный удалённый сервер в наборе:
 - **`secrets.json`** — флаги (`profile_super`, `profile_gstack`, `context7`, `linear`, `playwright`, `azure_mcp`, `ado`, `dotnet_skills`, `codex_review`, `codex_plugin`), `context7_api_key`, ADO email/orgs/PAT-ы. Заполняется prompt-once при TTY. Авторизацию Codex (`~/.codex/auth.json`) и OAuth-токен Linear claudefiles **не** трогает — это `codex login` и `claude mcp login linear`.
 ```
 
-В разделе про миграцию (рядом со строкой 167, сразу после пункта про `profile_gstack`) добавить пункт:
+В разделе про миграцию (рядом со строкой 167, сразу после пункта про `profile_gstack`) добавить пункт. Внешний фенс здесь из четырёх бэктиков, потому что внутри вложенный трёхбэктиковый блок — в README вставлять надо только его содержимое:
 
-```markdown
+````markdown
 - **Миграция на существующей машине: `linear`.** Такой же обязательный флаг, как `profile_gstack`: `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`) падает с `missing required flag 'flags.linear'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
   ```bash
   python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
     ~/.config/claudefiles/secrets.json flags.linear false
   ```
-```
+````
 
 - [ ] **Step 7: Проверить, что доки не разъехались с кодом**
 
