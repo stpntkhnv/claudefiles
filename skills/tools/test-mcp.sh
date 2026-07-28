@@ -35,4 +35,39 @@ printf '%s' '{"playwright":{"x":1},"context7":{"y":1}}' > "$h/.config/claudefile
 mcp_apply "$van" "$(_mcp_manifest vanilla)" "$(_mcp_legacy)"
 grep -q "mcp remove --scope user playwright" "$CLAUDE_FAKE_LOG" || { echo FAIL legacy-not-swept-when-manifest-current; exit 1; }
 [ -f "$h/.config/claudefiles/managed-mcp.json" ] && { echo FAIL legacy-not-consumed-2; exit 1; }
+
+# --- linear: удалённый HTTP-сервер по флагу, без секретов -----------------------
+cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
+{ "flags":{"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"linear":true},"context7_api_key":"" }
+EOF
+python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" vanilla | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+assert sorted(d)==["context7","linear"], d
+assert d["linear"]=={"type":"http","url":"https://mcp.linear.app/mcp"}, d["linear"]
+print("ok vanilla-linear")'
+python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" g | python3 -c '
+import json,sys
+d=json.load(sys.stdin); assert sorted(d)==["context7","linear"], d; print("ok g-linear")'
+# super: все флаги кроме linear выключены -> ровно один сервер
+python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" | python3 -c '
+import json,sys
+d=json.load(sys.stdin); assert list(d)==["linear"], d; print("ok super-linear")'
+# api-ключ context7 продолжает доезжать до аргументов после рефакторинга
+cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
+{ "flags":{"context7":true,"playwright":false,"azure_mcp":false,"ado":false,"linear":false},"context7_api_key":"KEY1" }
+EOF
+python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+assert list(d)==["context7"], d
+assert d["context7"]["args"][-2:]==["--api-key","KEY1"], d["context7"]
+print("ok super-c7-key")'
+python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" vanilla | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+assert list(d)==["context7"], d
+assert d["context7"]["args"][-2:]==["--api-key","KEY1"], d["context7"]
+print("ok vanilla-c7-key")'
+
 echo "PASS test-mcp"

@@ -18,21 +18,27 @@ def chromium_path():                # resolver for the standalone case (finding 
             return p
     return shutil.which("chromium") or shutil.which("chromium-browser") or "/usr/bin/chromium"
 
-servers = {}
-profile = sys.argv[2] if len(sys.argv) > 2 else "all"
-if profile in ("vanilla", "g"):          # vanilla and g always ship context7 only, regardless of flags
+LINEAR = {"type": "http", "url": "https://mcp.linear.app/mcp"}
+
+def context7_cfg():
     args = ["-y", "@upstash/context7-mcp"]
     if cfg.get("context7_api_key"):
         args += ["--api-key", cfg["context7_api_key"]]
-    print(json.dumps({"context7": {"type": "stdio", "command": "npx", "args": args}}))
+    return {"type": "stdio", "command": "npx", "args": args}
+
+servers = {}
+profile = sys.argv[2] if len(sys.argv) > 2 else "all"
+if profile in ("vanilla", "g"):          # vanilla and g always ship context7, regardless of flags
+    servers["context7"] = context7_cfg()
+    if on("linear"):
+        servers["linear"] = LINEAR
+    print(json.dumps(servers))
     sys.exit(0)
 if on("playwright"):
     servers["playwright"] = {"type":"stdio","command":"npx",
         "args":["-y","@playwright/mcp@latest","--executable-path", chromium_path()]}
 if on("context7"):
-    args = ["-y","@upstash/context7-mcp"]
-    if cfg.get("context7_api_key"): args += ["--api-key", cfg["context7_api_key"]]
-    servers["context7"] = {"type":"stdio","command":"npx","args":args}
+    servers["context7"] = context7_cfg()
 if on("azure_mcp"):
     servers["azure"] = {"type":"stdio","command":"npx","args":["-y","@azure/mcp@latest","server","start"]}
 if on("ado"):
@@ -43,4 +49,6 @@ if on("ado"):
         servers[f"azureDevOps-{org}"] = {"type":"stdio","command":"npx",
             "args":["-y","@azure-devops/mcp",org,"--authentication","pat"],
             "env":{"PERSONAL_ACCESS_TOKEN":token}}
+if on("linear"):
+    servers["linear"] = LINEAR
 print(json.dumps(servers))
