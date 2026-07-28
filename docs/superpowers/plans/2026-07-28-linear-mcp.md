@@ -54,7 +54,7 @@
 Дописать в `skills/tools/test-mcp.sh` ПЕРЕД последней строкой `echo "PASS test-mcp"`:
 
 ```bash
-# --- linear: удалённый HTTP-сервер по флагу, без секретов -----------------------
+# --- linear: a remote HTTP server behind a flag, no secrets ---------------------
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
 { "flags":{"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"linear":true},"context7_api_key":"" }
 EOF
@@ -67,11 +67,11 @@ print("ok vanilla-linear")'
 python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" g | python3 -c '
 import json,sys
 d=json.load(sys.stdin); assert sorted(d)==["context7","linear"], d; print("ok g-linear")'
-# super: все флаги кроме linear выключены -> ровно один сервер
+# super: every flag but linear is off -> exactly one server
 python3 "$cf/claude/mcp/build_servers.py" "$(config_path)" | python3 -c '
 import json,sys
 d=json.load(sys.stdin); assert list(d)==["linear"], d; print("ok super-linear")'
-# api-ключ context7 продолжает доезжать до аргументов после рефакторинга
+# the context7 api key still reaches args after the refactor
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
 { "flags":{"context7":true,"playwright":false,"azure_mcp":false,"ado":false,"linear":false},"context7_api_key":"KEY1" }
 EOF
@@ -204,7 +204,7 @@ fi
 Дописать в `skills/tools/test-mcp.sh` ПЕРЕД последней строкой `echo "PASS test-mcp"`:
 
 ```bash
-# --- mcp_linear_login: логин ровно тогда, когда CLI сказал "нужна авторизация" ---
+# --- mcp_linear_login: login exactly when the CLI said auth is needed -----------
 cb="$(claude_bin)"
 "$cb" mcp add-json --scope user linear '{"type":"http","url":"https://mcp.linear.app/mcp"}' >/dev/null
 
@@ -227,8 +227,8 @@ CLAUDEFILES_ASSUME_TTY=0 mcp_linear_login vanilla 2> "$h/linear-notty.log"
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-without-tty; exit 1; }
 grep -q "claude mcp login linear" "$h/linear-notty.log" || { echo FAIL no-manual-hint-without-tty; exit 1; }
 
-# дрейф: манифест на месте, сервера в конфиге нет -> `mcp get` ненулевой. Не логинить, не падать,
-# но и не молчать: молчание тут означало бы отрапортовать успех при неработающем Linear.
+# drift: manifest present, server gone from the config -> `mcp get` exits non-zero. Don't log in,
+# don't die, but don't stay quiet either: silence here would report success on a broken Linear.
 "$cb" mcp remove --scope user linear >/dev/null 2>&1 || true
 : > "$CLAUDE_FAKE_LOG"
 CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla 2> "$h/linear-missing.log" \
@@ -414,7 +414,7 @@ git commit -m "feat(linear): флаг flags.linear в опросе setup.sh"
 Дописать в `skills/tools/test-multiprofile.sh` ПЕРЕД последней строкой `echo "PASS test-multiprofile"`:
 
 ```bash
-# --- Linear: фаза логина идёт по каждому выбранному профилю, в его собственном каталоге ---
+# --- Linear: the login phase visits every selected profile, in that profile's dir ---
 setup_fixture_home >/dev/null; h3="$HOME"
 printf 'CREDS' > "$h3/.claude/.credentials.json"
 mkdir -p "$h3/.config/claudefiles"
@@ -429,22 +429,22 @@ CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null
   || { echo FAIL no-linear-login-in-super; exit 1; }
 [ "$(grep -cF "mcp login linear" "$CLAUDE_FAKE_LOG")" = 2 ] \
   || { echo FAIL linear-login-count; exit 1; }
-# без этого предыдущие ассерты вакуумны: состояние фейкового claude одно на фикстур-HOME, поэтому
-# `mcp get linear` в super ответит «есть» даже если сервер добавили только в vanilla. Манифесты
-# профилей — настоящие раздельные файлы, и вот они это различают.
+# without this the asserts above are vacuous: the fake claude's state is one per fixture HOME, so
+# `mcp get linear` answers "present" for super even if the server only landed in vanilla. The
+# per-profile manifests are real separate files, and they do tell the two apart.
 for m in vanilla super; do
   python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "linear" in d,(sys.argv[1],d)' \
     "$h3/.config/claudefiles/managed-mcp.$m.json" || { echo "FAIL linear-missing-in-$m-manifest"; exit 1; }
 done
 
-# уже авторизован -> ни одного логина: защита от «браузер на каждом прогоне»
+# already authenticated -> no login at all: the guard against "a browser on every run"
 : > "$CLAUDE_FAKE_LOG"
 CLAUDE_FAKE_MCP_AUTH=ok CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL linear-login-when-authed; exit 1; }
 
-# флаг обратно в false -> сервер снимается со всех выбранных профилей и логина нет.
-# Ветка vanilla/g в build_servers.py перестала быть терминальной именно этой задачей, поэтому
-# снятие проверяется сквозным прогоном, а не только юнит-тестами mcp_apply.
+# flag back to false -> the server is removed from every selected profile and no login happens.
+# This task is what made the vanilla/g branch in build_servers.py non-terminal, so removal is
+# proven end to end, not only by mcp_apply's unit tests.
 python3 "$cf/lib/py/config_io.py" setbool "$h3/.config/claudefiles/secrets.json" flags.linear false
 : > "$CLAUDE_FAKE_LOG"
 CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null
@@ -456,7 +456,7 @@ for m in vanilla super; do
 done
 python3 "$cf/lib/py/config_io.py" setbool "$h3/.config/claudefiles/secrets.json" flags.linear true
 
-# упавший профиль -> setup.sh уходит в exit 1 ДО фазы логина
+# a failed profile -> setup.sh exits 1 BEFORE the login phase
 : > "$CLAUDE_FAKE_LOG"
 CLAUDE_FAKE_NO_PLUGINS=1 CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null \
   && { echo FAIL expected-exit-1-on-failed-profile; exit 1; }
