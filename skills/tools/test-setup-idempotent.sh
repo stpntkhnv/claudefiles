@@ -83,4 +83,52 @@ grep -q "owns the VISION stage" "$h/.claude-g/CLAUDE.md" || { echo "FAIL g is no
 grep -q "turn the vision into a specification" "$h/.claude-super/CLAUDE.md" || { echo "FAIL super is not the vision consumer"; exit 1; }
 grep -q "turn the vision into a specification" "$h/.claude-g/CLAUDE.md" && { echo "FAIL g carries the consumer text"; exit 1; }
 grep -q "owns the VISION stage" "$h/.claude-super/CLAUDE.md" && { echo "FAIL super carries the producer text"; exit 1; }
+
+# --- clean install, end to end through the real setup.sh.
+# Plant exactly the junk a clean install exists to remove, then answer every question the way the
+# seeded secrets.json was configured: same answers -> byte-identical result, which is what makes
+# the diffs below meaningful.
+# Every SELECTED profile gets drift planted: asserting only vanilla would pass even if the wiring
+# cleaned vanilla and silently skipped super and g.
+mkdir -p "$h/.claude/skills/ges-esp" "$h/.claude/rules" \
+         "$h/.claude-super/skills/ges-esp" "$h/.claude-g/skills/ges-esp"
+printf 'STRAY' > "$h/.claude/skills/ges-esp/SKILL.md"
+printf 'STRAY' > "$h/.claude-super/skills/ges-esp/SKILL.md"
+printf 'STRAY' > "$h/.claude-g/skills/ges-esp/SKILL.md"
+printf 'RULE'  > "$h/.claude/rules/context7.md"
+printf 'BAK'   > "$h/.claude/settings.json.bak.20260101-000000"
+python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));d["junkKey"]=1;json.dump(d,open(p,"w"))' "$h/.claude/settings.json"
+printf '\nhand-written line\n' >> "$h/.claude/CLAUDE.md"
+printf 'CREDS' > "$h/.claude/.credentials.json"; printf 'HIST' > "$h/.claude/history.jsonl"
+mkdir -p "$h/.claude/projects/keepme"
+: > "$CLAUDE_FAKE_LOG"; : > "$PACLOG"
+# answers: confirm word, super y, dotnet y, codex_review y, codex_plugin n, playwright y,
+# azure n, ado n, gstack y, context7 y, context7 key (empty). Trailing blanks absorb any
+# dep prompt that a non-provisioned box might raise AFTER the config phase.
+printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\n\n\n\n' | \
+  CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 CLAUDEFILES_CLEAN_SKIP_NET=1 bash "$cf/setup.sh"
+
+[ -e "$h/.claude/skills/ges-esp" ] && { echo "FAIL clean kept a stray skill"; exit 1; }
+[ -e "$h/.claude-super/skills/ges-esp" ] && { echo "FAIL clean skipped the super profile"; exit 1; }
+[ -e "$h/.claude-g/skills/ges-esp" ] && { echo "FAIL clean skipped the g profile"; exit 1; }
+[ -e "$h/.claude/rules" ] && { echo "FAIL clean kept rules/"; exit 1; }
+[ -e "$h/.claude/settings.json.bak.20260101-000000" ] && { echo "FAIL clean kept a settings backup"; exit 1; }
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "junkKey" not in d,d' "$h/.claude/settings.json" \
+  || { echo "FAIL clean kept an unknown settings key"; exit 1; }
+grep -q 'hand-written line' "$h/.claude/CLAUDE.md" && { echo "FAIL clean kept hand-written CLAUDE.md text"; exit 1; }
+[ "$(cat "$h/.claude/.credentials.json")" = CREDS ] || { echo "FAIL clean touched credentials"; exit 1; }
+[ "$(cat "$h/.claude/history.jsonl")" = HIST ] || { echo "FAIL clean touched history"; exit 1; }
+[ -d "$h/.claude/projects/keepme" ] || { echo "FAIL clean touched projects/"; exit 1; }
+[ -s "$PACLOG" ] && { echo "FAIL clean run invoked pacman/sudo"; cat "$PACLOG"; exit 1; }
+# the backup is the whole safety net: the stray must be recoverable from it
+bdir="$(ls -d "$h/.config/claudefiles/clean-backups"/*/ | head -1)"
+[ -f "$bdir/vanilla/skills/ges-esp/SKILL.md" ] || { echo "FAIL stray not in the clean backup"; exit 1; }
+[ -f "$bdir/global/secrets.json" ] || { echo "FAIL answers not in the clean backup"; exit 1; }
+# same answers as the seeded run -> the rebuilt config is byte-identical to the pre-clean one
+diff "$h/first.json" "$h/.claude/settings.json" || { echo "FAIL clean rebuild differs from a normal run"; exit 1; }
+diff "$h/first-claudemd.md" "$h/.claude/CLAUDE.md" || { echo "FAIL clean CLAUDE.md differs"; exit 1; }
+# ...and a normal run right after a clean one is still a no-op
+cp "$h/.claude/settings.json" "$h/post-clean.json"
+CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
+diff "$h/post-clean.json" "$h/.claude/settings.json" || { echo "FAIL not idempotent after clean"; exit 1; }
 echo "PASS test-setup-idempotent"

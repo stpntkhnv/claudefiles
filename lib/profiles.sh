@@ -82,11 +82,16 @@ generate_wrapper() { # <name> <target_dir>
 provision_selected() { # <repo_root> <profile...>; sets PROVISION_FAILED=(); runs each recipe in a subshell
   local root="$1"; shift
   PROVISION_FAILED=()
+  if [ "${CLAUDEFILES_CLEAN_ACTIVE:-false}" = true ]; then
+    log "clean install: wiping $*"     # phase B: the profile list is finally resolved here
+  fi
   local p dir
   for p in "$@"; do
     dir="$(profile_dir "$p")"
     log "profile: $p → $dir"
-    if ( export CLAUDEFILES_TARGET="$dir"; export CLAUDE_CONFIG_DIR="$dir"; "recipe_$p" "$root" ); then
+    if ( export CLAUDEFILES_TARGET="$dir"; export CLAUDE_CONFIG_DIR="$dir"
+         if [ "${CLAUDEFILES_CLEAN_ACTIVE:-false}" = true ]; then clean_profile "$p" || exit 1; fi
+         "recipe_$p" "$root" ); then
       ensure_credentials_symlink "$dir"
       if [ "$p" != vanilla ]; then generate_wrapper "$p" "$dir"; fi
     else
