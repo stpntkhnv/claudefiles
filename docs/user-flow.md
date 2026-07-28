@@ -24,7 +24,8 @@ flowchart TD
   onlyv --> g{"g профиль? (profile_gstack)"}
   feats --> g
   g --> c7{"context7?"}
-  c7 --> persist[("ответы в secrets.json, повтор не переспрашивает")]
+  c7 --> lin{"linear?"}
+  lin --> persist[("ответы в secrets.json, повтор не переспрашивает")]
 
   persist --> deps["deps: pacman по выбранным фичам"]
   deps --> provision["провижн выбранных профилей"]

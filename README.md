@@ -6,9 +6,9 @@
 
 | Профиль | Каталог | Вызов | Содержимое |
 |---------|---------|-------|------------|
-| **vanilla** | `~/.claude` (дефолт, ставится всегда) | `claude` | статуслайн (`claude/statusline/statusline.sh`) с бейджем профиля (`[vanilla]`/`[super]`/`[g]`) слева, личный marker-блок в `CLAUDE.md`, Context7 MCP (включён безусловно), светлая тема, `tui: fullscreen`; без плагинов, без хуков. `model`/`effortLevel` не управляются `setup.sh` — их выставляет сам пользователь. |
-| **super** | `~/.claude-super` (по флагу `profile_super`) | `claude-super` | сегодняшний полный superpowers-стек: плагин `superpowers@claude-plugins-official` и detect-dotnet хук (всегда для super), опционально `dotnet@dotnet-agent-skills`/`codex@openai-codex`, codex-наж в `CLAUDE.md`, MCP по флагам, `model: opus[1m]`, `effortLevel: xhigh`, тёмная тема, статуслайн (тот же `claude/statusline/statusline.sh`) с бейджем профиля (`[vanilla]`/`[super]`/`[g]`) слева. |
-| **g** | `~/.claude-g` (по флагу `profile_gstack`) | `claude-g` | gstack (23 скилла-роли, около 50 скиллов всего), та же ванильная база (статуслайн с бейджем, звук, context7 MCP, личный marker-блок), плюс marker-блок про `docs/vision`; `model: opus[1m]`, `effortLevel: xhigh`; без плагинов и без SessionStart-хука. |
+| **vanilla** | `~/.claude` (дефолт, ставится всегда) | `claude` | статуслайн (`claude/statusline/statusline.sh`) с бейджем профиля (`[vanilla]`/`[super]`/`[g]`) слева, личный marker-блок в `CLAUDE.md`, Context7 MCP (включён безусловно) и Linear MCP по флагу, светлая тема, `tui: fullscreen`; без плагинов, без хуков. `model`/`effortLevel` не управляются `setup.sh` — их выставляет сам пользователь. |
+| **super** | `~/.claude-super` (по флагу `profile_super`) | `claude-super` | сегодняшний полный superpowers-стек: плагин `superpowers@claude-plugins-official` и detect-dotnet хук (всегда для super), опционально `dotnet@dotnet-agent-skills`/`codex@openai-codex`, codex-наж в `CLAUDE.md`, MCP по флагам (включая Linear), `model: opus[1m]`, `effortLevel: xhigh`, тёмная тема, статуслайн (тот же `claude/statusline/statusline.sh`) с бейджем профиля (`[vanilla]`/`[super]`/`[g]`) слева. |
+| **g** | `~/.claude-g` (по флагу `profile_gstack`) | `claude-g` | gstack (23 скилла-роли, около 50 скиллов всего), та же ванильная база (статуслайн с бейджем, звук, context7 MCP и Linear MCP по флагу, личный marker-блок), плюс marker-блок про `docs/vision`; `model: opus[1m]`, `effortLevel: xhigh`; без плагинов и без SessionStart-хука. |
 
 Для каждого не-дефолтного профиля `setup.sh` генерирует исполняемый wrapper `~/.local/bin/claude-<profile>` (например `~/.local/bin/claude-super`): `exec env CLAUDE_CONFIG_DIR=<каталог профиля> claude "$@"`. Wrapper работает в скриптах и свежих шеллах (не только как интерактивный alias); генерация идемпотентна и не перезаписывает файл, который уже существует и не управляется claudefiles. Обёртка видна, только если `~/.local/bin` есть в `$PATH`; если каталога там нет (например, нестандартный `$HOME`, чей `$PATH` указывает на другой `.local/bin`), `setup.sh` не падает и не правит rc-файлы, а печатает `WARN` с точной строкой `export PATH="$HOME/.local/bin:$PATH"`. Авторизация общая: в каждый не-дефолтный каталог `setup.sh` кладёт `.credentials.json` — симлинк на `~/.claude/.credentials.json` (там лежит реальный файл, который пишет `claude login`), так что `claude-super` не требует повторного логина. История сессий (`history.jsonl`) при этом раздельная на каждый каталог. Новый профиль добавляется одной записью в `lib/profiles.sh` (функция `recipe_<name>` + каталог `~/.claude-<name>`), без переписывания оркестратора.
 
@@ -17,7 +17,7 @@
 `lib/*.sh` — сфокусированные модули, каждый тестируется против фейкового `claude` и фикстур-`$HOME`; `lib/profiles.sh` компонует их в рецепты профилей (`recipe_vanilla`, `recipe_super`, `recipe_g`). Оркестратор `setup.sh` гоняет по порядку:
 
 1. **preflight** — проверка git/python3; про `claude` предупреждает, но не падает.
-2. **config** — спрашивает (только при TTY; без TTY — падает с понятным списком, а не висит), какие профили ставить (`vanilla` — всегда; `super` — по флагу `profile_super`; `g` — по флагу `profile_gstack`), при выбранном `super` — его флаги (`dotnet_skills`, `codex_review`, `codex_plugin`, `playwright`, `azure_mcp`, `ado` и ADO-секреты), плюс общий `context7` (нужен и vanilla, и super, и g) — всё читается/пишется в `~/.config/claudefiles/secrets.json`.
+2. **config** — спрашивает (только при TTY; без TTY — падает с понятным списком, а не висит), какие профили ставить (`vanilla` — всегда; `super` — по флагу `profile_super`; `g` — по флагу `profile_gstack`), при выбранном `super` — его флаги (`dotnet_skills`, `codex_review`, `codex_plugin`, `playwright`, `azure_mcp`, `ado` и ADO-секреты), плюс общие `context7` и `linear` (нужны и vanilla, и super, и g) — всё читается/пишется в `~/.config/claudefiles/secrets.json`.
 3. **deps** — по флагам выбранных профилей проверяет системные зависимости и предлагает поставить недостающие через `pacman` (Arch-only, `y/N` → `sudo pacman`): `node`/`npx` — всегда (vanilla безусловно поднимает Context7), `chromium` для Playwright и `dotnet-sdk` для .NET-плагина — только если выбран `super` с соответствующим флагом, `bun` — только если выбран `g` (без него инсталлятор gstack не стартует). Любая ветка не фатальна — нет TTY/`pacman`/`sudo` печатает ручную команду и продолжает.
 4. **профили** — для каждого выбранного профиля (`vanilla`, затем `super`, затем `g`, если выбраны) в **subshell** с `CLAUDEFILES_TARGET`/`CLAUDE_CONFIG_DIR`, указывающими на его каталог, гонится рецепт:
    - `settings.json` — заменяет управляемые ключи профиля из его шаблона (`settings.vanilla.template.json`: `theme`, `tui`, `statusLine`; `settings.super.template.json`: `theme`, `tui`, `statusLine` (тот же скрипт, что у vanilla) плюс `model`, `effortLevel`, `enabledPlugins`, `extraKnownMarketplaces`, `hooks`; `settings.g.template.json`: `theme`, `tui`, `statusLine`, `model`, `effortLevel`, `hooks` (Stop/Notification, без SessionStart) — без `enabledPlugins`), сохраняя чужие ключи. Управляемый ключ, отсутствующий в шаблоне профиля, удаляется из target — этим первый прогон на дефолтном каталоге снимает весь super-стейт (миграция «был super → стал vanilla»); `model`/`effortLevel` при этом чистятся только one-time (если раньше был включён super), дальше не трогаются.
@@ -25,7 +25,7 @@
    - `claude.md` — рецепт super при `codex_review=true` вписывает codex-наж marker-блоком; рецепт vanilla вместо него вписывает личный marker-блок со стилем письма. Рецепт `g` пишет и личный marker-блок, и marker-блок про видение (`docs/vision/`) в роли producer; рецепт super пишет тот же блок в роли consumer, если выбран `profile_gstack`, иначе снимает его. Все идемпотентны и сохраняют остальное содержимое файла.
    - `plugins` (только рецепт super) — идемпотентно ставит `superpowers@claude-plugins-official` (всегда для super), при `dotnet_skills=true` — `dotnet@dotnet-agent-skills`, при эффективном `codex_review && codex_plugin` — `codex@openai-codex`; добавляет их marketplace при отсутствии (гварды: повторный запуск — no-op).
    - `gstack` (только рецепт `g`) — клонирует/обновляет апстрим gstack в `skills/gstack` и гоняет его инсталлятор, когда HEAD сдвинулся (подробности — в разделе «Профиль g (этап видения)» ниже); провал роняет только профиль `g`.
-   - `mcp` — сверяет user-scope MCP-серверы каталога профиля с его собственным манифестом (`managed-mcp.<profile>.json`): vanilla и g всегда получают только `context7`, super — набор по своим флагам; чужие/неуправляемые серверы не трогает. На дефолтном каталоге первый прогон подхватывает legacy `managed-mcp.json` как «прошлый манифест» и снимает старые super-серверы.
+   - `mcp` — сверяет user-scope MCP-серверы каталога профиля с его собственным манифестом (`managed-mcp.<profile>.json`): vanilla и g всегда получают `context7` плюс `linear` по флагу, super — набор по своим флагам; чужие/неуправляемые серверы не трогает. На дефолтном каталоге первый прогон подхватывает legacy `managed-mcp.json` как «прошлый манифест» и снимает старые super-серверы. Linear единственный удалённый сервер в наборе: `claude mcp add-json` кладёт его в конфиг, но работать он начинает после разового `claude mcp login linear`. Отдельная фаза после провижна проверяет `claude mcp get linear` и предлагает вход только когда CLI сам сказал `Needs authentication` — на авторизованной машине она молчит, без TTY печатает команду.
    - после успешного рецепта — симлинк `.credentials.json` и wrapper `~/.local/bin/claude-<profile>` (оба — только для не-дефолтных каталогов).
 5. **verify** — валидирует `settings.json` каждого выбранного профиля через `python3 -m json.tool`; не фатально.
 
@@ -37,7 +37,7 @@
 
 | Зависимость | Пакет | Нужна для | Флаг |
 |-------------|-------|-----------|------|
-| `node` + `npx` | `nodejs npm` | запуск любого MCP-сервера (все на `npx`) | всегда (vanilla безусловно ставит Context7); дополнительно любой из `context7`/`playwright`/`azure_mcp`/`ado` в super |
+| `node` + `npx` | `nodejs npm` | запуск stdio MCP-серверов (Linear не в счёт: удалённый HTTP, npx ему не нужен) | всегда (vanilla безусловно ставит Context7); дополнительно любой из `context7`/`playwright`/`azure_mcp`/`ado` в super |
 | `chromium` | `chromium` | браузер Playwright MCP | `playwright` |
 | `.NET SDK` (`dotnet`) | `dotnet-sdk` | C# language server / dotnet-плагин | `dotnet_skills` |
 | `codex` CLI (≥0.142.5) | `npm i -g @openai/codex` | Codex cross-review спек/планов/диффов | `codex_review` |
@@ -111,7 +111,7 @@ cp -a ~/.config/claudefiles/clean-backups/<время>/<профиль>/. ~/.cla
 
 Живут только в `~/.config/claudefiles/` — вне репозитория, `chmod 600`:
 
-- **`secrets.json`** — флаги (`profile_super`, `profile_gstack`, `context7`, `playwright`, `azure_mcp`, `ado`, `dotnet_skills`, `codex_review`, `codex_plugin`), `context7_api_key`, ADO email/orgs/PAT-ы. Заполняется prompt-once при TTY. Авторизацию Codex (`~/.codex/auth.json`) claudefiles **не** трогает — это `codex login`.
+- **`secrets.json`** — флаги (`profile_super`, `profile_gstack`, `context7`, `linear`, `playwright`, `azure_mcp`, `ado`, `dotnet_skills`, `codex_review`, `codex_plugin`), `context7_api_key`, ADO email/orgs/PAT-ы. Заполняется prompt-once при TTY. Авторизацию Codex (`~/.codex/auth.json`) и OAuth-токен Linear claudefiles **не** трогает — это `codex login` и `claude mcp login linear`.
 - **`managed-mcp.<profile>.json`** — манифест применённых MCP-серверов профиля (для сверки и удаления ровно своего); содержит base64-PAT для ADO (в профиле super), поэтому тоже `600`. Legacy `managed-mcp.json` (из до-профильной раскладки) потребляется один раз при миграции дефолтного каталога и затем удаляется.
 
 Тест гарантирует, что ни один секретный путь не трекается; репозиторий **публичный**.
@@ -168,6 +168,11 @@ cp -a ~/.config/claudefiles/clean-backups/<время>/<профиль>/. ~/.cla
   ```bash
   python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
     ~/.config/claudefiles/secrets.json flags.profile_gstack false
+  ```
+- **Миграция на существующей машине: `linear`.** Такой же обязательный флаг, как `profile_gstack`: `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`) падает с `missing required flag 'flags.linear'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
+  ```bash
+  python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
+    ~/.config/claudefiles/secrets.json flags.linear false
   ```
 - **`~/.gstack` не под управлением claudefiles.** Это домашний каталог самого инструмента gstack (`config.yaml`, аналитика, `projects/`), а не Claude Code; `gstack-config`, `gstack-analytics`, `gstack-uninstall` пользователь запускает сам, без переменных окружения claudefiles.
 - Выключение `profile_gstack` не удаляет `~/.claude-g` — симметрично с `profile_super`/`~/.claude-super`; каталог просто перестаёт обновляться. Ручная чистка: `gstack-uninstall`, затем `rm -rf ~/.claude-g && rm -f ~/.local/bin/claude-g`.
