@@ -132,20 +132,32 @@ _clean_mcp_purge() {   # <name> <profile_dir> — drop EVERY user-scope server, 
   # leave oauthAccount / projects / machineID and the file mode untouched.
   if [ "$name" = vanilla ] && [ -f "$HOME/.claude.json" ]; then
     clean_backup_take "$HOME/.claude.json" "$name/legacy-claude.json"
-    python3 - "$HOME/.claude.json" <<'PY'
+    # `|| die`: rewriting is the one step here that can leave the file damaged, so its failure must
+    # stop the run through our own error path. Unguarded, it would surface as a raw traceback and
+    # kill setup.sh via set -e — an unintentional exit, which the module's contract rules out.
+    python3 - "$HOME/.claude.json" <<'PY' || die "clean: cannot rewrite $HOME/.claude.json"
 import json, os, sys
 p = sys.argv[1]
 try:
     d = json.load(open(p))
 except Exception:
     sys.exit(0)
-if d.pop("mcpServers", None) is None:
+if "mcpServers" not in d:          # `not in`, not pop()-is-None: an explicit null must still be dropped
     sys.exit(0)
+del d["mcpServers"]
 tmp = p + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(d, f, indent=2)
-os.chmod(tmp, os.stat(p).st_mode & 0o777)
-os.replace(tmp, p)
+try:
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=2)
+    os.chmod(tmp, os.stat(p).st_mode & 0o777)
+    os.replace(tmp, p)
+except Exception as e:
+    sys.stderr.write(f"{e}\n")
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    sys.exit(1)
 PY
   fi
   return 0
