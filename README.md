@@ -110,6 +110,16 @@ git clone https://github.com/stpntkhnv/claudefiles.git ~/dev/claudefiles && cd ~
   ```
   Пин живёт в окружении, а не в `secrets.json`: chezmoi-триггер `run_after` про него не знает, поэтому для постоянного пина переменную надо экспортировать там, откуда запускается `setup.sh` (shell rc или окружение chezmoi).
 - **Провал профиля `g` изолирован.** Провал любого шага (fetch/reset/clone/rm/mkdir/запись маркера/сам инсталлятор) возвращает 1, и `recipe_g` роняет ровно профиль `g` (`lib/profiles.sh:49`), не трогая `vanilla` и `super`. Исключение — недоступный апстрим при уже установленной и совпадающей с маркером ревизии: обновление пропускается с `WARN`, профиль остаётся зелёным (`lib/gstack.sh:53-54`), иначе оффлайн-прогон ронял бы корректный профиль. Инсталлятор всегда получает `< /dev/null`: новый вопрос в апстриме должен ронять прогон, а не подвешивать его. Отдельно от stdin инсталлятор обёрнут в `timeout` (по умолчанию 1800 с, переопределяется `CLAUDEFILES_GSTACK_TIMEOUT`): на живом прогоне загрузка Chromium внутри gstack сорвалась и провисела 12 часов без единого байта прогресса — `< /dev/null` там не помогает, процесс ждёт не нас. По таймауту профиль `g` падает с явным сообщением, маркер не пишется, следующий прогон повторяет попытку.
+- **Известная проблема апстрима: `playwright install` не завершается.** На этой машине команда делает свою работу и после этого висит вечно — даже когда скачивать нечего (0.5 с CPU, дальше бесконечное ожидание). Сеть ни при чём: те же архивы качаются напрямую на 29 МБ/с. gstack вызывает её (`setup:479`) только если не смог запустить браузер, а `chromium.launch()` поднимает не полный Chrome, а отдельную сборку `chromium_headless_shell`. Положите обе в кэш Playwright руками — проверка пройдёт, и шаг установки браузера не выполнится вовсе. Ревизия (`1208`) и версия (`145.0.7632.6`) берутся из `playwright` в `package.json` апстрима, при его обновлении числа поменяются:
+  ```bash
+  V=145.0.7632.6; R=1208; C="$HOME/.cache/ms-playwright"
+  for n in chrome-linux64:chromium-$R chrome-headless-shell-linux64:chromium_headless_shell-$R; do
+    z="${n%%:*}"; d="$C/${n##*:}"
+    curl -sSL -o /tmp/pw.zip "https://cdn.playwright.dev/builds/cft/$V/linux64/$z.zip"
+    mkdir -p "$d" && unzip -q -o /tmp/pw.zip -d "$d" && touch "$d/INSTALLATION_COMPLETE"
+  done; rm -f /tmp/pw.zip
+  ```
+  После этого `CLAUDEFILES_GSTACK_SMOKE=1 bash skills/tools/smoke-gstack.sh` проходит целиком: установка, скиллы в профиле, второй прогон no-op, `~/.claude` не тронут.
 - **Миграция на существующей машине.** `profile_gstack` — обязательный флаг: `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`, который ходит именно так) падает с `missing required flag 'flags.profile_gstack'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала (спросит) — или засеять без TTY:
   ```bash
   python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
