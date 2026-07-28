@@ -16,13 +16,18 @@ git ls-remote --exit-code https://github.com/garrytan/gstack.git HEAD >/dev/null
   || { echo "SKIP smoke-gstack (upstream unreachable)"; exit 0; }
 
 source "$cf/lib/common.sh"; source "$cf/lib/gstack.sh"
-: "${CLAUDEFILES_GSTACK_TIMEOUT:=900}"; export CLAUDEFILES_GSTACK_TIMEOUT
+# Measured, not guessed: the browser blob alone is 167 MiB, and 900s was not enough on a working
+# connection. Give the real thing room, or this smoke can only ever report its own timeout.
+: "${CLAUDEFILES_GSTACK_TIMEOUT:=2700}"; export CLAUDEFILES_GSTACK_TIMEOUT
 SB="$(mktemp -d)"; trap 'rm -rf "$SB"' EXIT
 export CLAUDEFILES_TARGET="$SB/.claude-g"
 before="$(ls -1 "$HOME/.claude/skills" 2>/dev/null | sort)"
 
 gstack_apply; rc=$?
 chk "real install returns 0"       [ "$rc" -eq 0 ]
+# Everything below reads state the first install was supposed to produce. Without this gate a
+# failed install makes the later checks compare empty against empty and print a misleading ok.
+[ "$rc" -eq 0 ] || { echo "SOME smoke-gstack CASES FAILED (first install did not succeed; later checks skipped)"; exit 1; }
 chk "clone present"                [ -d "$CLAUDEFILES_TARGET/skills/gstack/.git" ]
 chk "marker written"               [ -s "$CLAUDEFILES_TARGET/.gstack-setup-head" ]
 chk "skills linked in the profile" bash -c 'ls -1 "$1/skills" | grep -qE "^gstack"' _ "$CLAUDEFILES_TARGET"
