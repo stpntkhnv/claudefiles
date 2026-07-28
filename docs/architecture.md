@@ -48,7 +48,7 @@ flowchart TD
   deps -.->|исключение| config
 ```
 
-`setup --> mcp` — единственный appliers-модуль, вызываемый оркестратором в обход `prof`: фаза `linear auth` зовёт `mcp_linear_login` напрямую (`setup.sh`, после verify), а не через рецепт профиля. Отсюда же `mcp --> config`: `mcp_linear_login` читает `config_flag` и `_has_tty` (mcp.sh:40,51).
+`setup --> mcp` — единственный appliers-модуль, вызываемый оркестратором в обход `prof`: фаза `linear auth` зовёт `mcp_linear_login` напрямую (`setup.sh`, после verify), а не через рецепт профиля. Отсюда же `mcp --> config`: `mcp_linear_login` читает `config_flag` и `_has_tty` (mcp.sh:41,66).
 
 ## Потоки данных
 
