@@ -109,10 +109,15 @@ Expected: FAIL, `lib/clean.sh: No such file or directory`.
 # eventually eat credentials or transcripts. settings.json.bak* is a glob, handled separately.
 _CLEAN_PATHS=(settings.json settings.local.json CLAUDE.md skills plugins rules agents commands output-styles .gstack-setup-head)
 
+# Manifests are mcp.sh's artifact, so their location comes from mcp.sh. _mcp_manifest takes one
+# profile name and cannot express "all of them, legacy included", which is what both the
+# announcement and the wipe need — derive the directory from the module instead of re-deriving it.
+_clean_manifest_dir() { dirname "$(_mcp_legacy)"; }
+
 _clean_paths_announce() {   # what the user is about to lose, and what they keep
   local p d
   log "clean install will remove:"
-  printf '  %s\n' "$(config_path)" "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-mcp*.json"
+  printf '  %s\n' "$(config_path)" "$(_clean_manifest_dir)/managed-mcp*.json"
   printf '  in every profile you select next: %s, settings.json.bak*, and every user-scope MCP server\n' "${_CLEAN_PATHS[*]}"
   for p in vanilla super g; do
     d="$(profile_dir "$p")"; [ -d "$d" ] && printf '  on disk now: %s\n' "$d"
@@ -233,7 +238,9 @@ Expected: FAIL, `clean_backup_open: command not found`.
 clean_backup_open() {   # [<stamp>] — open the run's backup dir. die on failure: the confirmation
                         # plus this backup ARE the safety net of the mode.
   local stamp="${1:-$(date +%Y%m%d-%H%M%S)}"
-  local dir="${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/clean-backups/$stamp"
+  # config.sh:6 already normalises CLAUDEFILES_CONFIG_DIR at source time, so re-declaring its
+  # default here would be a second copy of the same fact.
+  local dir="$CLAUDEFILES_CONFIG_DIR/clean-backups/$stamp"
   mkdir -p "$dir" || die "clean: cannot create backup dir $dir"
   chmod 700 "$dir" || die "clean: cannot chmod 700 $dir"
   export CLAUDEFILES_CLEAN_BACKUP="$dir"
@@ -256,13 +263,13 @@ clean_backup_take() {   # <src> <rel_dest> — copy into the backup preserving m
 
 clean_global() {   # phase A: the stored answers and the MCP manifests. Runs BEFORE config_ensure_all,
                    # so the run re-asks everything instead of wiping answers it just collected.
-  local cfg="${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}" f
-  clean_backup_take "$cfg/secrets.json" "global/secrets.json"
-  for f in "$cfg"/managed-mcp*.json; do
+  local f mdir; mdir="$(_clean_manifest_dir)"
+  clean_backup_take "$(config_path)" "global/secrets.json"
+  for f in "$mdir"/managed-mcp*.json; do
     [ -e "$f" ] || continue
     clean_backup_take "$f" "global/$(basename "$f")"
   done
-  rm -f "$cfg/secrets.json" "$cfg"/managed-mcp*.json
+  rm -f "$(config_path)" "$mdir"/managed-mcp*.json
   log "clean: stored answers and MCP manifests wiped"
 }
 ```
