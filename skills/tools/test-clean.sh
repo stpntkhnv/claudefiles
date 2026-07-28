@@ -63,4 +63,85 @@ chmod 700 "$b/global"
 clean_backup_take "$CLAUDEFILES_CONFIG_DIR/nope.json" "global/nope.json" || { echo "FAIL take-missing-src"; exit 1; }
 [ -e "$b/global/nope.json" ] && { echo "FAIL invented-backup"; exit 1; }
 
+# --- clean_profile: the demolition itself
+d="$h/.claude"
+mkdir -p "$d/skills/ges-esp" "$d/skills/context7-mcp" "$d/skills/gstack/foo" \
+         "$d/rules" "$d/agents" "$d/plugins/repos" "$d/projects/x" "$d/sessions"
+printf 'STRAY' > "$d/skills/ges-esp/SKILL.md"
+printf 'GSTACK' > "$d/skills/gstack/foo/SKILL.md"
+printf '{"a":1}' > "$d/settings.json"
+printf 'LOCAL' > "$d/settings.local.json"
+printf 'BAK' > "$d/settings.json.bak.20260101-000000"
+printf 'hand-written' > "$d/CLAUDE.md"
+printf 'RULE' > "$d/rules/context7.md"
+printf 'PLUG' > "$d/plugins/config.json"
+printf 'CREDS' > "$d/.credentials.json"
+printf 'HIST' > "$d/history.jsonl"
+printf 'HEAD' > "$d/.gstack-setup-head"
+python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{},"stray":{}},"oauthAccount":{"e":"x"}},open(sys.argv[1],"w"))' "$d/.claude.json"
+# legacy ~/.claude.json: pre-CLAUDE_CONFIG_DIR layout, still carries mcpServers for the default profile
+python3 -c 'import json,sys;json.dump({"mcpServers":{"old":{}},"oauthAccount":{"e":"x"},"projects":{"p":1}},open(sys.argv[1],"w"))' "$h/.claude.json"
+chmod 600 "$h/.claude.json"
+
+: > "$CLAUDE_FAKE_LOG"
+( export CLAUDEFILES_TARGET="$d" CLAUDE_CONFIG_DIR="$d"; clean_profile vanilla ) >/dev/null \
+  || { echo "FAIL clean_profile-vanilla-failed"; exit 1; }
+
+for gone in settings.json settings.local.json settings.json.bak.20260101-000000 CLAUDE.md \
+            skills plugins rules agents .gstack-setup-head; do
+  [ -e "$d/$gone" ] && { echo "FAIL survived: $gone"; exit 1; }
+done
+for kept in .credentials.json history.jsonl projects/x sessions .claude.json; do
+  [ -e "$d/$kept" ] || { echo "FAIL destroyed: $kept"; exit 1; }
+done
+# every user-scope server is dropped, not only the ones our manifest owns
+grep -qF 'mcp remove --scope user context7' "$CLAUDE_FAKE_LOG" || { echo "FAIL mcp-ours-not-removed"; exit 1; }
+grep -qF 'mcp remove --scope user stray'    "$CLAUDE_FAKE_LOG" || { echo "FAIL mcp-stray-not-removed"; exit 1; }
+# legacy file: only mcpServers goes, everything else and the mode survive
+python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "mcpServers" not in d,d;assert d["oauthAccount"]=={"e":"x"};assert d["projects"]=={"p":1}' "$h/.claude.json" \
+  || { echo "FAIL legacy-surgery"; exit 1; }
+[ "$(stat -c %a "$h/.claude.json")" = 600 ] || { echo "FAIL legacy-mode-changed"; exit 1; }
+# backup: strays are recoverable, the multi-GB gstack clone is not copied
+[ -f "$b/vanilla/skills/ges-esp/SKILL.md" ] || { echo "FAIL stray-not-backed-up"; exit 1; }
+[ -f "$b/vanilla/CLAUDE.md" ] || { echo "FAIL claudemd-not-backed-up"; exit 1; }
+[ -f "$b/vanilla/plugins/config.json" ] || { echo "FAIL plugins-not-backed-up"; exit 1; }
+# a gstack dir OUTSIDE profile g is drift nobody reclones, so it must be recoverable
+[ -f "$b/vanilla/skills/gstack/foo/SKILL.md" ] || { echo "FAIL gstack-outside-g-not-backed-up"; exit 1; }
+
+# an already-clean directory is not an error: absent files are the normal steady state
+( export CLAUDEFILES_TARGET="$d" CLAUDE_CONFIG_DIR="$d"; clean_profile vanilla ) >/dev/null \
+  || { echo "FAIL clean_profile-not-idempotent"; exit 1; }
+
+# profile g without bun: refuse and touch NOTHING — gstack_apply exits early without bun
+# (gstack.sh:53), so wiping the clone we cannot reinstall is the one unrecoverable move.
+gd="$h/.claude-g"; mkdir -p "$gd/skills/gstack"; printf 'HEAD' > "$gd/.gstack-setup-head"
+printf '{"b":2}' > "$gd/settings.json"
+_clean_have_bun() { return 1; }                 # shadows the real check, like test-profiles.sh does
+if ( export CLAUDEFILES_TARGET="$gd" CLAUDE_CONFIG_DIR="$gd"; clean_profile g ) >/dev/null 2>&1; then
+  echo "FAIL g-cleaned-without-bun"; exit 1; fi
+[ -d "$gd/skills/gstack" ] || { echo "FAIL g-clone-removed-without-bun"; exit 1; }
+[ -f "$gd/.gstack-setup-head" ] || { echo "FAIL g-marker-removed-without-bun"; exit 1; }
+[ -f "$gd/settings.json" ] || { echo "FAIL g-settings-removed-without-bun"; exit 1; }
+unset -f _clean_have_bun
+
+# profile g whose configured gstack repo does not resolve: same refusal. clean_preflight probes
+# github in general, which proves nothing about a pinned or self-hosted gstack, and the clone is
+# the one artifact deliberately left out of the backup.
+if ( export CLAUDEFILES_TARGET="$gd" CLAUDE_CONFIG_DIR="$gd" \
+            CLAUDEFILES_CLEAN_SKIP_NET=0 CLAUDEFILES_GSTACK_REPO="file://$h/no-such-repo.git"
+     clean_profile g ) >/dev/null 2>&1; then echo "FAIL g-cleaned-with-unreachable-gstack"; exit 1; fi
+[ -d "$gd/skills/gstack" ] || { echo "FAIL g-clone-removed-with-unreachable-gstack"; exit 1; }
+
+# fail-closed for a PROFILE, not only for the global wipe: if a backup copy dies mid-way, the
+# profile must still be whole. Two passes (copy everything, then delete) are what guarantee it.
+fd="$h/.claude-fc"; mkdir -p "$fd/skills/keep"
+printf 'S' > "$fd/settings.json"; printf 'M' > "$fd/CLAUDE.md"; printf 'K' > "$fd/skills/keep/SKILL.md"
+mkdir -p "$b/vanilla"; chmod 500 "$b/vanilla"
+if ( export CLAUDEFILES_TARGET="$fd" CLAUDE_CONFIG_DIR="$fd"; clean_profile vanilla ) >/dev/null 2>&1; then
+  chmod 700 "$b/vanilla"; echo "FAIL profile-clean-not-fail-closed"; exit 1; fi
+chmod 700 "$b/vanilla"
+[ -f "$fd/settings.json" ] || { echo "FAIL settings deleted despite a failed backup"; exit 1; }
+[ -f "$fd/CLAUDE.md" ] || { echo "FAIL CLAUDE.md deleted despite a failed backup"; exit 1; }
+[ -f "$fd/skills/keep/SKILL.md" ] || { echo "FAIL skills deleted despite a failed backup"; exit 1; }
+
 echo "PASS test-clean"

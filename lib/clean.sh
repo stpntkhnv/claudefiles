@@ -94,3 +94,108 @@ clean_global() {   # phase A: the stored answers and the MCP manifests. Runs BEF
   rm -f "$(config_path)" "$mdir"/managed-mcp*.json
   log "clean: stored answers and MCP manifests wiped"
 }
+
+_clean_have_bun() { command -v bun >/dev/null 2>&1; }   # a seam: tests shadow this instead of PATH
+
+_clean_gstack_reachable() {   # the g clone is deliberately NOT backed up (1.5G), so refuse to delete
+                              # it unless the CONFIGURED repo answers. clean_preflight probes github
+                              # generally, which says nothing about a pinned or self-hosted gstack.
+  [ "${CLAUDEFILES_CLEAN_SKIP_NET:-0}" = 1 ] && return 0
+  local repo="${CLAUDEFILES_GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
+  local ref="${CLAUDEFILES_GSTACK_REF:-}"
+  if [ -n "$ref" ]; then
+    timeout 30 git ls-remote --exit-code "$repo" "$ref" >/dev/null 2>&1 && return 0
+    # a SHA pin resolves to no ref name, so it cannot be proven without cloning; settle for proving
+    # the repo itself answers, which is still strictly better than deleting blind.
+    timeout 30 git ls-remote "$repo" >/dev/null 2>&1 && return 0
+    return 1
+  fi
+  timeout 30 git ls-remote "$repo" HEAD >/dev/null 2>&1
+}
+
+_clean_mcp_names() {   # <claude_json> — whitespace-separated user-scope server names, "" if none
+  [ -f "$1" ] || return 0
+  python3 -c 'import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print(" ".join((d.get("mcpServers") or {}).keys()))' "$1"
+}
+
+_clean_mcp_purge() {   # <name> <profile_dir> — drop EVERY user-scope server, not just ours
+  local name="$1" d="$2" n cb; cb="$(claude_bin)"
+  for n in $(_clean_mcp_names "$d/.claude.json"); do
+    "$cb" mcp remove --scope user "$n" >/dev/null 2>&1 \
+      || warn "clean: could not remove MCP server '$n' (mcp_apply reconciles next)"
+  done
+  # The legacy ~/.claude.json predates CLAUDE_CONFIG_DIR and still carries mcpServers for the
+  # default profile; the CLI may write only to the profile dir, so drop that ONE key by hand and
+  # leave oauthAccount / projects / machineID and the file mode untouched.
+  if [ "$name" = vanilla ] && [ -f "$HOME/.claude.json" ]; then
+    clean_backup_take "$HOME/.claude.json" "$name/legacy-claude.json"
+    python3 - "$HOME/.claude.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except Exception:
+    sys.exit(0)
+if d.pop("mcpServers", None) is None:
+    sys.exit(0)
+tmp = p + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(d, f, indent=2)
+os.chmod(tmp, os.stat(p).st_mode & 0o777)
+os.replace(tmp, p)
+PY
+  fi
+  return 0
+}
+
+_clean_backup_skills() {   # <profile_dir> <name> — back up skills/, skipping the gstack clone ONLY
+                           # in profile g, where the recipe reclones it. A gstack dir anywhere else
+                           # is drift nobody promised to rebuild, so it gets backed up like the rest.
+  local d="$1" name="$2" s base
+  for s in "$d"/skills/* "$d"/skills/.[!.]*; do
+    [ -e "$s" ] || [ -L "$s" ] || continue
+    base="$(basename "$s")"
+    [ "$base" = gstack ] && [ "$name" = g ] && continue
+    clean_backup_take "$s" "$name/skills/$base"
+  done
+  return 0
+}
+
+clean_profile() {   # <name> — phase B, inside provision_selected's subshell, before the recipe.
+                    # 0 = wiped, 1 = refused or failed (the profile then goes to PROVISION_FAILED:
+                    # a half-wiped, half-rebuilt profile is worse than an honest failure).
+  local name="$1" d="${CLAUDEFILES_TARGET:-$HOME/.claude}" p f
+  local -a doomed=()
+  if [ "$name" = g ]; then
+    _clean_have_bun \
+      || { warn "clean: profile g needs bun to reinstall gstack — refusing to wipe it (sudo pacman -S --needed bun)"; return 1; }
+    _clean_gstack_reachable \
+      || { warn "clean: gstack repo/revision does not resolve — refusing to wipe a clone that is not backed up"; return 1; }
+  fi
+  for p in "${_CLEAN_PATHS[@]}"; do
+    [ -e "$d/$p" ] || [ -L "$d/$p" ] || continue
+    doomed+=("$d/$p")
+  done
+  for f in "$d"/settings.json.bak*; do
+    [ -e "$f" ] && doomed+=("$f")
+  done
+  # PASS 1 — back everything up first. clean_backup_take dies on failure, so a broken backup aborts
+  # the run with the profile still WHOLE. Interleaving copy and delete would leave the profile
+  # half-destroyed the moment a later copy fails, which is the one state with no way back.
+  for p in "${doomed[@]}"; do
+    case "$(basename "$p")" in
+      skills) _clean_backup_skills "$d" "$name" ;;
+      *)      clean_backup_take "$p" "$name/$(basename "$p")" ;;
+    esac
+  done
+  _clean_mcp_purge "$name" "$d"          # after the backups: it mutates .claude.json files too
+  # PASS 2 — delete.
+  for p in "${doomed[@]}"; do
+    rm -rf "$p" || { warn "clean: cannot remove $p"; return 1; }
+  done
+  log "clean: $name wiped — the recipe rebuilds it from the repo"
+  return 0
+}
