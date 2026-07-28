@@ -70,4 +70,37 @@ assert list(d)==["context7"], d
 assert d["context7"]["args"][-2:]==["--api-key","KEY1"], d["context7"]
 print("ok vanilla-c7-key")'
 
+# --- mcp_linear_login: login exactly when the CLI said auth is needed -----------
+cb="$(claude_bin)"
+"$cb" mcp add-json --scope user linear '{"type":"http","url":"https://mcp.linear.app/mcp"}' >/dev/null
+
+printf '%s' '{"flags":{"linear":false}}' > "$h/.config/claudefiles/secrets.json"
+: > "$CLAUDE_FAKE_LOG"
+CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla
+grep -q "mcp " "$CLAUDE_FAKE_LOG" && { echo FAIL login-touched-cli-with-flag-off; exit 1; }
+
+printf '%s' '{"flags":{"linear":true}}' > "$h/.config/claudefiles/secrets.json"
+: > "$CLAUDE_FAKE_LOG"
+CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla
+grep -q "mcp login linear" "$CLAUDE_FAKE_LOG" || { echo FAIL no-login-when-needed; exit 1; }
+
+: > "$CLAUDE_FAKE_LOG"
+CLAUDE_FAKE_MCP_AUTH=ok CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla
+grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-when-already-authed; exit 1; }
+
+: > "$CLAUDE_FAKE_LOG"
+CLAUDEFILES_ASSUME_TTY=0 mcp_linear_login vanilla 2> "$h/linear-notty.log"
+grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-without-tty; exit 1; }
+grep -q "claude mcp login linear" "$h/linear-notty.log" || { echo FAIL no-manual-hint-without-tty; exit 1; }
+
+# drift: manifest present, server gone from the config -> `mcp get` exits non-zero. Don't log in,
+# don't die, but don't stay quiet either: silence here would report success on a broken Linear.
+"$cb" mcp remove --scope user linear >/dev/null 2>&1 || true
+: > "$CLAUDE_FAKE_LOG"
+CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla 2> "$h/linear-missing.log" \
+  || { echo FAIL login-nonzero-on-missing-server; exit 1; }
+grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-on-missing-server; exit 1; }
+grep -q "claude mcp login linear" "$h/linear-missing.log" || { echo FAIL no-warn-on-missing-server; exit 1; }
+echo "ok linear-login-gate"
+
 echo "PASS test-mcp"
