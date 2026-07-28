@@ -211,3 +211,81 @@ clean_profile() {   # <name> — phase B, inside provision_selected's subshell, 
   log "clean: $name wiped — the recipe rebuilds it from the repo"
   return 0
 }
+
+clean_verify() {   # <name> <repo_root> — audit a cleaned profile. Always 0: Claude Code re-adds the
+                   # official marketplace on its own at next start, so this reports, never gates.
+  local name="$1" root="$2" d issues=0 s base p w listing cb
+  d="$(profile_dir "$name")"; cb="$(claude_bin)"
+  # 1. strays in skills/. Derived from the repo tree (and, for g, from what the clone published),
+  #    NOT from a hardcoded list: that knowledge belongs to skills.sh, not to the eraser.
+  for s in "$d"/skills/*/; do
+    [ -d "$s" ] || continue
+    base="$(basename "$s")"
+    [ "$base" = gstack ] && continue
+    [ -d "$root/claude/skills/$base" ] && continue
+    [ -f "$d/skills/gstack/$base/SKILL.md" ] && continue
+    warn "clean-verify $name: stray skill '$base'"; issues=$((issues + 1))
+  done
+  # 2. directories the repo never creates
+  for p in rules agents commands output-styles; do
+    if [ -e "$d/$p" ]; then warn "clean-verify $name: '$p/' is back"; issues=$((issues + 1)); fi
+  done
+  # 3. live user-scope MCP set vs the manifest we just wrote
+  local manifest; manifest="$(_mcp_manifest "$name")"
+  if [ -f "$manifest" ] && [ -f "$d/.claude.json" ]; then
+    python3 -c 'import json,sys
+want=sorted(json.load(open(sys.argv[1])).keys())
+try: live=sorted((json.load(open(sys.argv[2])).get("mcpServers") or {}).keys())
+except Exception: live=[]
+sys.exit(0 if want==live else 1)' "$manifest" "$d/.claude.json" \
+      || { warn "clean-verify $name: user-scope MCP servers differ from $manifest"; issues=$((issues + 1)); }
+  fi
+  # 4. top-level keys of settings.json vs the profile's template. After a clean the file is written
+  #    from scratch, so anything extra means something re-added a key mid-run.
+  local tmpl="$root/claude/settings/settings.$name.template.json"
+  if [ -f "$tmpl" ] && [ -f "$d/settings.json" ]; then
+    python3 -c 'import json,sys
+t=set(json.load(open(sys.argv[1])));o=set(json.load(open(sys.argv[2])))
+sys.exit(0 if t==o else 1)' "$tmpl" "$d/settings.json" \
+      || { warn "clean-verify $name: settings.json keys differ from $(basename "$tmpl")"; issues=$((issues + 1)); }
+  fi
+  # 5. plugin COVERAGE (expected ⊆ installed), not equality: Claude Code auto-installs the official
+  #    marketplace by itself, and reporting that as drift would train the user to ignore the report.
+  #    The expected set is read from the profile's OWN enabledPlugins, freshly written from the
+  #    template and already flag-gated by jsonmerge.py — so the "which plugins does this profile
+  #    want" logic is never duplicated here and cannot go stale.
+  local want_plugins=()
+  if [ -f "$d/settings.json" ]; then
+    while read -r w; do
+      [ -n "$w" ] && want_plugins+=("$w")
+    done < <(python3 -c 'import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print("\n".join((d.get("enabledPlugins") or {}).keys()))' "$d/settings.json")
+  fi
+  if [ "${#want_plugins[@]}" -gt 0 ]; then
+    listing="$(env CLAUDE_CONFIG_DIR="$d" "$cb" plugin list 2>/dev/null || true)"
+    for w in "${want_plugins[@]}"; do
+      _has_token "$w" <<<"$listing" \
+        || { warn "clean-verify $name: plugin '$w' is NOT installed after clean"; issues=$((issues + 1)); }
+    done
+  fi
+  if [ "$issues" -eq 0 ]; then
+    log "clean-verify $name: OK"
+  else
+    warn "clean-verify $name: $issues issue(s) — backup: ${CLAUDEFILES_CLEAN_BACKUP:-n/a}"
+  fi
+  return 0
+}
+
+clean_warn_unselected() {   # <selected...> — clean touches ONLY the profiles being installed. A
+                            # leftover dir keeps its transcripts, so deleting it is not our call;
+                            # saying nothing about it would misrepresent what the run just did.
+  local p d
+  for p in vanilla super g; do
+    case " $* " in *" $p "*) continue ;; esac
+    d="$(profile_dir "$p")"
+    [ -d "$d" ] && warn "clean: $d was not selected — left untouched (still dirty)"
+  done
+  return 0
+}

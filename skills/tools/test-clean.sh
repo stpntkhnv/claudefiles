@@ -166,4 +166,56 @@ chmod 700 "$b/fc/CLAUDE.md"
 [ -f "$fd/CLAUDE.md" ] || { echo "FAIL CLAUDE.md deleted despite a failed backup"; exit 1; }
 [ -f "$fd/skills/keep/SKILL.md" ] || { echo "FAIL skills deleted despite a failed backup"; exit 1; }
 
+# --- clean_verify: the audit. Always 0; every finding is a warn on stderr.
+vd="$h/.claude"; mkdir -p "$vd/skills/context7-mcp"
+python3 -c 'import json,sys;json.dump({"model":"x"},open(sys.argv[1],"w"))' "$vd/settings.json"
+python3 -c 'import json,sys;json.dump({"context7":{}},open(sys.argv[1],"w"))' "$CLAUDEFILES_CONFIG_DIR/managed-mcp.vanilla.json"
+python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{}}},open(sys.argv[1],"w"))' "$vd/.claude.json"
+printf '{"flags":{"profile_super":true,"dotnet_skills":true,"codex_review":false,"codex_plugin":false}}' > "$CLAUDEFILES_CONFIG_DIR/secrets.json"
+
+# a repo-owned skill is not drift; a stray one is
+out="$(clean_verify vanilla "$cf" 2>&1)" || { echo "FAIL verify-nonzero"; exit 1; }
+printf '%s' "$out" | grep -qF 'stray skill' && { echo "FAIL false-positive-on-repo-skill"; exit 1; }
+mkdir -p "$vd/skills/ges-esp"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "stray skill 'ges-esp'" || { echo "FAIL stray-skill-not-reported"; exit 1; }
+rm -rf "$vd/skills/ges-esp"
+
+# a dir the repo never creates coming back
+mkdir -p "$vd/rules"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" || { echo "FAIL rules-not-reported"; exit 1; }
+rm -rf "$vd/rules"
+
+# live MCP set drifting from the manifest
+python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{},"extra":{}}},open(sys.argv[1],"w"))' "$vd/.claude.json"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'MCP servers differ' || { echo "FAIL mcp-drift-not-reported"; exit 1; }
+python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{}}},open(sys.argv[1],"w"))' "$vd/.claude.json"
+
+# a key the template does not own surviving in settings.json
+python3 -c 'import json,sys;json.dump({"model":"x","junk":1},open(sys.argv[1],"w"))' "$vd/settings.json"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'settings.json keys' || { echo "FAIL settings-drift-not-reported"; exit 1; }
+
+# plugins: coverage of what the profile's own enabledPlugins declares. plugins_apply swallows
+# install errors, and after a clean the plugins/ dir is gone, so a silent loss must be visible here.
+sd="$h/.claude-super"; mkdir -p "$sd/skills"
+python3 -c 'import json,sys;json.dump({"enabledPlugins":{"superpowers@claude-plugins-official":True,"dotnet@dotnet-agent-skills":True}},open(sys.argv[1],"w"))' "$sd/settings.json"
+: > "$CLAUDE_FAKE_STATE/plugins"
+out="$(clean_verify super "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "plugin 'superpowers@claude-plugins-official' is NOT installed" \
+  || { echo "FAIL missing-plugin-not-reported"; exit 1; }
+printf 'superpowers@claude-plugins-official\ndotnet@dotnet-agent-skills\n' > "$CLAUDE_FAKE_STATE/plugins"
+out="$(clean_verify super "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'is NOT installed' && { echo "FAIL false-positive-on-installed-plugins"; exit 1; }
+
+# --- clean_warn_unselected: a profile left out of this run keeps its transcripts, so it is never
+# deleted — but staying dirty silently would be a lie about what "clean install" just did.
+mkdir -p "$h/.claude-g"
+out="$(clean_warn_unselected vanilla super 2>&1)" || { echo "FAIL warn-unselected-nonzero"; exit 1; }
+printf '%s' "$out" | grep -qF "$h/.claude-g" || { echo "FAIL unselected-profile-not-reported"; exit 1; }
+printf '%s' "$out" | grep -qF "$h/.claude-super" && { echo "FAIL selected-profile-reported"; exit 1; }
+[ -d "$h/.claude-g" ] || { echo "FAIL unselected-profile-deleted"; exit 1; }
+
 echo "PASS test-clean"
