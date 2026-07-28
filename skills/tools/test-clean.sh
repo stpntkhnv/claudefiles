@@ -168,7 +168,11 @@ chmod 700 "$b/fc/CLAUDE.md"
 
 # --- clean_verify: the audit. Always 0; every finding is a warn on stderr.
 vd="$h/.claude"; mkdir -p "$vd/skills/context7-mcp"
-python3 -c 'import json,sys;json.dump({"model":"x"},open(sys.argv[1],"w"))' "$vd/settings.json"
+# The baseline settings.json must carry exactly the vanilla template's top-level key set. Seeding
+# it with unrelated keys would make check #4 fire from the very first call, and the drift assertion
+# further down would then pass whether or not its mutation took effect.
+python3 -c 'import json,sys;json.dump(json.load(open(sys.argv[1])),open(sys.argv[2],"w"))' \
+  "$cf/claude/settings/settings.vanilla.template.json" "$vd/settings.json"
 python3 -c 'import json,sys;json.dump({"context7":{}},open(sys.argv[1],"w"))' "$CLAUDEFILES_CONFIG_DIR/managed-mcp.vanilla.json"
 python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{}}},open(sys.argv[1],"w"))' "$vd/.claude.json"
 printf '{"flags":{"profile_super":true,"dotnet_skills":true,"codex_review":false,"codex_plugin":false}}' > "$CLAUDEFILES_CONFIG_DIR/secrets.json"
@@ -176,6 +180,7 @@ printf '{"flags":{"profile_super":true,"dotnet_skills":true,"codex_review":false
 # a repo-owned skill is not drift; a stray one is
 out="$(clean_verify vanilla "$cf" 2>&1)" || { echo "FAIL verify-nonzero"; exit 1; }
 printf '%s' "$out" | grep -qF 'stray skill' && { echo "FAIL false-positive-on-repo-skill"; exit 1; }
+printf '%s' "$out" | grep -qF "'rules/' is back" && { echo "FAIL rules-false-positive"; exit 1; }
 mkdir -p "$vd/skills/ges-esp"
 out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF "stray skill 'ges-esp'" || { echo "FAIL stray-skill-not-reported"; exit 1; }
@@ -193,8 +198,11 @@ out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF 'MCP servers differ' || { echo "FAIL mcp-drift-not-reported"; exit 1; }
 python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{}}},open(sys.argv[1],"w"))' "$vd/.claude.json"
 
-# a key the template does not own surviving in settings.json
-python3 -c 'import json,sys;json.dump({"model":"x","junk":1},open(sys.argv[1],"w"))' "$vd/settings.json"
+# a key the template does not own surviving in settings.json. Both directions, or the assertion
+# proves nothing: silent on a template-shaped file, loud once one extra key appears.
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'settings.json keys' && { echo "FAIL settings-drift-false-positive"; exit 1; }
+python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));d["junk"]=1;json.dump(d,open(p,"w"))' "$vd/settings.json"
 out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF 'settings.json keys' || { echo "FAIL settings-drift-not-reported"; exit 1; }
 
