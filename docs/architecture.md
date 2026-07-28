@@ -11,6 +11,7 @@ flowchart TD
   subgraph orch["Оркестрация"]
     setup["setup.sh"]
     prof["profiles.sh (provision_selected + recipes)"]
+    cleanm["clean.sh (ластик чистой установки)"]
   end
   subgraph sysdeps["Системные deps"]
     deps["deps.sh"]
@@ -35,8 +36,10 @@ flowchart TD
   setup --> prof
   setup --> deps
   setup --> config
+  setup --> cleanm
   prof --> settings & skills & plugins & mcp & claudemd
   prof --> gstack
+  prof --> cleanm
   settings --> jsonmerge
   prof --> config
   config --> configio
@@ -60,7 +63,7 @@ flowchart LR
 
 ## Прогон setup.sh
 
-Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:82-83).
+Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:95-96).
 
 ```mermaid
 sequenceDiagram
@@ -72,6 +75,7 @@ sequenceDiagram
   participant R as recipe_*
   participant M as модули *_apply
   Note over U: preflight: git/python3 обязательны (die), нет claude = warn
+  Note over U: clean (опционально): подтверждение, preflight, бэкап, снос ответов и манифестов
   U->>C: config_ensure_all (опрос флагов и секретов)
   C-->>U: secrets.json
   U->>D: deps_apply (pacman по флагам)
@@ -80,6 +84,9 @@ sequenceDiagram
   end
   U->>P: provision_selected(vanilla, super, g)
   loop каждый профиль (субшелл: TARGET, CONFIG_DIR)
+    opt чистая установка
+      P->>P: clean_profile (снос конфиг-поверхности; g без bun = отказ)
+    end
     P->>R: recipe_vanilla / recipe_super / recipe_g
     R->>M: settings, skills, claudemd, [plugins], [gstack], mcp
     M-->>R: settings.json, CLAUDE.md, managed-mcp
@@ -137,6 +144,6 @@ flowchart LR
 
 ## Слои коротко
 
-- Оркестрация (`setup.sh`, `profiles.sh`) знает фазы и рецепты; провижн каждого профиля идёт в субшелле с экспортом `CLAUDEFILES_TARGET` и `CLAUDE_CONFIG_DIR` (profiles.sh:89).
+- Оркестрация (`setup.sh`, `profiles.sh`) знает фазы и рецепты; провижн каждого профиля идёт в субшелле с экспортом `CLAUDEFILES_TARGET` и `CLAUDE_CONFIG_DIR` (profiles.sh:92).
 - Модули-appliers идемпотентны и владеют своим артефактом; `jsonmerge.py`: только логика мёрджа settings, `config_io.py`: только хранилище секретов.
 - Все стора секретов пишутся с `chmod 600` (`config_io.py:42-44`, `mcp.sh:26`).

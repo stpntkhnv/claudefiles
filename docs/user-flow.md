@@ -15,7 +15,10 @@ flowchart TD
   gate -->|да| run
   direct --> run["setup.sh"]
 
-  run --> q{"super профиль?"}
+  run --> clean{"чистая установка? (y/N + слово clean)"}
+  clean -->|да| wipe["clean-preflight, бэкап, снос secrets.json и манифестов"]
+  clean -->|нет| q{"super профиль?"}
+  wipe --> q
   q -->|нет| onlyv["только vanilla"]
   q -->|да| feats["опрос super-фич: dotnet, codex, playwright, azure, ADO"]
   onlyv --> g{"g профиль? (profile_gstack)"}
@@ -25,6 +28,7 @@ flowchart TD
 
   persist --> deps["deps: pacman по выбранным фичам"]
   deps --> provision["провижн выбранных профилей"]
+  provision --> cp["перед рецептом: clean_profile (только выбранные профили)"]
   provision --> out1["claude -> vanilla"]
   provision --> out2["claude-super -> super"]
   provision --> out3["claude-g -> gstack"]
