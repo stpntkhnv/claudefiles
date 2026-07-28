@@ -50,6 +50,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
   if [ "$(config_flag context7)" = true ]; then
     config_ensure_optional context7_api_key "Context7 API key (empty = free tier)" --secret
   fi
+  config_ensure_flag linear        "Enable Linear MCP (issue tracker, one-time OAuth login)? (y/N)"
 }
 config_ensure_all
 

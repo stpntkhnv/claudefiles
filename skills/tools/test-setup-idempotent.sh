@@ -39,7 +39,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$h/bin/bun"; chmod +x "$h/bin/bun"; ha
 # seed non-interactive config so no prompt is needed
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags": {"profile_super":true,"profile_gstack":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false},
+{ "flags": {"profile_super":true,"profile_gstack":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false,"linear":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
@@ -103,9 +103,9 @@ printf 'CREDS' > "$h/.claude/.credentials.json"; printf 'HIST' > "$h/.claude/his
 mkdir -p "$h/.claude/projects/keepme"
 : > "$CLAUDE_FAKE_LOG"; : > "$PACLOG"
 # answers: confirm word, super y, dotnet y, codex_review y, codex_plugin n, playwright y,
-# azure n, ado n, gstack y, context7 y, context7 key (empty). Trailing blanks absorb any
-# dep prompt that a non-provisioned box might raise AFTER the config phase.
-printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\n\n\n\n' | \
+# azure n, ado n, gstack y, context7 y, context7 key (empty), linear n. Trailing blanks absorb
+# any dep prompt that a non-provisioned box might raise AFTER the config phase.
+printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\n\n\n\n' | \
   CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 CLAUDEFILES_CLEAN_SKIP_NET=1 bash "$cf/setup.sh"
 
 [ -e "$h/.claude/skills/ges-esp" ] && { echo "FAIL clean kept a stray skill"; exit 1; }

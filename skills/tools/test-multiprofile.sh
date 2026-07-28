@@ -14,7 +14,7 @@ printf 'CREDS' > "$h/.claude/.credentials.json"
 mkdir -p "$h/.config/claudefiles"
 printf '%s' '{"playwright":{"x":1},"context7":{"y":1}}' > "$h/.config/claudefiles/managed-mcp.json"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags":{"profile_super":true,"profile_gstack":false,"context7":true,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
+{ "flags":{"profile_super":true,"profile_gstack":false,"context7":true,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false,"linear":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 
@@ -62,7 +62,7 @@ EOF
 printf 'CREDS' > "$h2/.claude/.credentials.json"
 mkdir -p "$h2/.config/claudefiles"
 cat > "$h2/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags":{"profile_super":false,"profile_gstack":false,"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},
+{ "flags":{"profile_super":false,"profile_gstack":false,"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false,"linear":false},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive 2> "$h2/err.log"
