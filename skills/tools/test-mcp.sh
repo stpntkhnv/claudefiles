@@ -109,6 +109,26 @@ grep -q "claude mcp login linear" "$h/linear-notty.log" || { echo FAIL no-manual
 grep -q "claude not available" "$h/linear-nocli.log" || { echo FAIL no-warn-without-cli; exit 1; }
 [ -s "$CLAUDE_FAKE_LOG" ] && { echo FAIL cli-called-when-unavailable; exit 1; }
 
+# rc=124 (the status check itself timed out) must get its own message, not the generic drift
+# text: a slow/unreachable network is a different fault than a missing server, and diagnosing it
+# as "not in config" sends the user chasing a manifest that is fine. Stub `timeout` itself (not
+# `claude`) so this is deterministic and instant — no real waiting, no real network.
+tdir="$(mktemp -d)"
+cat > "$tdir/timeout" <<'EOF'
+#!/usr/bin/env bash
+# Always reports "timed out", regardless of args, to pin mcp_linear_login's rc=124 branch.
+exit 124
+EOF
+chmod +x "$tdir/timeout"
+: > "$CLAUDE_FAKE_LOG"
+( export PATH="$tdir:$PATH"; CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla ) 2> "$h/linear-timeout.log" \
+  || { echo FAIL login-nonzero-on-check-timeout; exit 1; }
+grep -q "status check timed out" "$h/linear-timeout.log" || { echo FAIL no-timeout-message; exit 1; }
+grep -q "not in this profile's config" "$h/linear-timeout.log" && { echo FAIL timeout-used-drift-message; exit 1; }
+grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-attempted-after-timeout; exit 1; }
+rm -rf "$tdir"
+echo "ok linear-login-timeout-branch"
+
 # drift: manifest present, server gone from the config -> `mcp get` exits non-zero. Don't log in,
 # don't die, but don't stay quiet either: silence here would report success on a broken Linear.
 # Assert on the "not in this profile's config" text, which ONLY the rc-nonzero branch emits —
@@ -121,5 +141,52 @@ CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla 2> "$h/linear-missing.log" \
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-on-missing-server; exit 1; }
 grep -q "not in this profile's config" "$h/linear-missing.log" || { echo FAIL no-warn-on-missing-server; exit 1; }
 echo "ok linear-login-gate"
+
+# --- Finding-1 regression: the CLI calls in mcp_linear_login must run in the terminal's foreground
+# process group (see the --foreground comment in lib/mcp.sh). faketools.bash's fake `claude` is a
+# plain bash script that never touches a terminal, so it cannot see GNU timeout backgrounding the
+# wrapped command (setpgid(0,0) without --foreground) — that blind spot is exactly how the bug
+# shipped. This needs a real pty (via `script`) and a stub that reports what it actually got,
+# deterministically — no reliance on the real CLI's tcsetattr actually hanging the process.
+if ! command -v script >/dev/null 2>&1; then
+  echo "SKIP foreground-regression: 'script' (util-linux) not available on this machine"
+else
+  fgdir="$(mktemp -d)"
+  cat > "$fgdir/claude" <<'EOF'
+#!/usr/bin/env bash
+# Purpose-built stub for the finding-1 regression test only (not faketools.bash's fake): `mcp get`
+# just needs to trigger the needs-auth branch; `mcp login` reports its own process group against
+# the terminal's foreground process group, instead of actually blocking on tty access.
+case "$1 $2" in
+  "mcp get")
+    printf 'linear:\n  Status: ! Needs authentication\n'; exit 0 ;;
+  "mcp login")
+    pgid="$(ps -o pgid= -p $$ | tr -d ' ')"; tpgid="$(ps -o tpgid= -p $$ | tr -d ' ')"
+    [ "$pgid" = "$tpgid" ] && echo FOREGROUND || echo BACKGROUND
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+  chmod +x "$fgdir/claude"
+  runner="$fgdir/run.sh"
+  cat > "$runner" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+source "$cf/lib/common.sh"; source "$cf/lib/config.sh"; source "$cf/lib/mcp.sh"
+export CLAUDEFILES_ASSUME_TTY=1
+mcp_linear_login vanilla
+EOF
+  printf '%s' '{"flags":{"linear":true}}' > "$h/.config/claudefiles/secrets.json"
+  # Bounded by an outer (test-harness-only, not code-under-test) timeout: a real regression here
+  # is the CLI getting stopped, not just slow, so a future break should fail fast, not wedge the
+  # whole suite. The stub above cannot itself hang -- it only reports pgid vs tpgid and exits.
+  # tr strips the \r a pty adds (termios ONLCR turns the stub's LF into CRLF) so the exact-line
+  # match below isn't fooled by a trailing \r.
+  fgout="$(PATH="$fgdir:$PATH" timeout 15 script -qec "bash '$runner'" /dev/null | tr -d '\r')"
+  echo "$fgout" | grep -q "^FOREGROUND$" || { echo "FAIL foreground-regression: expected FOREGROUND, got: $fgout"; exit 1; }
+  echo "$fgout" | grep -q "^BACKGROUND$" && { echo "FAIL foreground-regression: got BACKGROUND"; exit 1; }
+  rm -rf "$fgdir"
+  echo "ok foreground-regression"
+fi
 
 echo "PASS test-mcp"
