@@ -367,25 +367,47 @@ if ( export CLAUDEFILES_TARGET="$gd" CLAUDE_CONFIG_DIR="$gd"; clean_profile g ) 
 [ -d "$gd/skills/gstack" ] || { echo "FAIL g-clone-removed-without-bun"; exit 1; }
 [ -f "$gd/.gstack-setup-head" ] || { echo "FAIL g-marker-removed-without-bun"; exit 1; }
 [ -f "$gd/settings.json" ] || { echo "FAIL g-settings-removed-without-bun"; exit 1; }
-unset -f _clean_have_bun
 
 # profile g whose configured gstack repo does not resolve: same refusal. clean_preflight probes
 # github in general, which proves nothing about a pinned or self-hosted gstack, and the clone is
 # the one artifact deliberately left out of the backup.
+# bun is pinned PRESENT here on purpose: without the stub this case would pass on a host that
+# simply has no bun, refusing at the earlier gate and never exercising the repo check at all.
+_clean_have_bun() { return 0; }
 if ( export CLAUDEFILES_TARGET="$gd" CLAUDE_CONFIG_DIR="$gd" \
             CLAUDEFILES_CLEAN_SKIP_NET=0 CLAUDEFILES_GSTACK_REPO="file://$h/no-such-repo.git"
      clean_profile g ) >/dev/null 2>&1; then echo "FAIL g-cleaned-with-unreachable-gstack"; exit 1; fi
 [ -d "$gd/skills/gstack" ] || { echo "FAIL g-clone-removed-with-unreachable-gstack"; exit 1; }
 
+# profile g that CAN be rebuilt: the wipe proceeds, and the clone is the one thing kept out of the
+# backup. Without this case the "skip gstack only in g" half of the rule has no coverage at all —
+# both refusal cases above bail before the backup pass ever runs.
+gok="$h/.claude-gok"; mkdir -p "$gok/skills/gstack/foo" "$gok/skills/keepme"
+printf 'CLONE' > "$gok/skills/gstack/foo/SKILL.md"; printf 'KEEP' > "$gok/skills/keepme/SKILL.md"
+printf 'HEAD' > "$gok/.gstack-setup-head"; printf '{"g":1}' > "$gok/settings.json"
+( export CLAUDEFILES_TARGET="$gok" CLAUDE_CONFIG_DIR="$gok"; clean_profile g ) >/dev/null \
+  || { echo "FAIL g-clean-refused-despite-bun-and-repo"; exit 1; }
+[ -e "$gok/skills" ] && { echo "FAIL g skills/ survived the wipe"; exit 1; }
+[ -e "$gok/.gstack-setup-head" ] && { echo "FAIL g marker survived the wipe"; exit 1; }
+[ -f "$b/g/skills/keepme/SKILL.md" ] || { echo "FAIL g non-clone skill not backed up"; exit 1; }
+[ -e "$b/g/skills/gstack" ] && { echo "FAIL g clone copied into the backup"; exit 1; }
+unset -f _clean_have_bun
+
 # fail-closed for a PROFILE, not only for the global wipe: if a backup copy dies mid-way, the
 # profile must still be whole. Two passes (copy everything, then delete) are what guarantee it.
+# The blocked destination must belong to a LATER path than the first: _CLEAN_PATHS starts with
+# settings.json, so breaking that one cannot tell two passes from interleaved copy-and-delete —
+# both would die on the first item, before deleting anything. Let settings.json copy through and
+# break CLAUDE.md's destination instead: an interleaved implementation would already have deleted
+# settings.json by the time it got there.
 fd="$h/.claude-fc"; mkdir -p "$fd/skills/keep"
 printf 'S' > "$fd/settings.json"; printf 'M' > "$fd/CLAUDE.md"; printf 'K' > "$fd/skills/keep/SKILL.md"
-mkdir -p "$b/vanilla"; chmod 500 "$b/vanilla"
-if ( export CLAUDEFILES_TARGET="$fd" CLAUDE_CONFIG_DIR="$fd"; clean_profile vanilla ) >/dev/null 2>&1; then
-  chmod 700 "$b/vanilla"; echo "FAIL profile-clean-not-fail-closed"; exit 1; fi
-chmod 700 "$b/vanilla"
-[ -f "$fd/settings.json" ] || { echo "FAIL settings deleted despite a failed backup"; exit 1; }
+mkdir -p "$b/fc/CLAUDE.md/blocker"; chmod 500 "$b/fc/CLAUDE.md"
+if ( export CLAUDEFILES_TARGET="$fd" CLAUDE_CONFIG_DIR="$fd"; clean_profile fc ) >/dev/null 2>&1; then
+  chmod 700 "$b/fc/CLAUDE.md"; echo "FAIL profile-clean-not-fail-closed"; exit 1; fi
+chmod 700 "$b/fc/CLAUDE.md"
+[ -f "$b/fc/settings.json" ] || { echo "FAIL the earlier path never reached the backup"; exit 1; }
+[ -f "$fd/settings.json" ] || { echo "FAIL settings deleted despite a later backup failure"; exit 1; }
 [ -f "$fd/CLAUDE.md" ] || { echo "FAIL CLAUDE.md deleted despite a failed backup"; exit 1; }
 [ -f "$fd/skills/keep/SKILL.md" ] || { echo "FAIL skills deleted despite a failed backup"; exit 1; }
 ```
@@ -437,20 +459,32 @@ _clean_mcp_purge() {   # <name> <profile_dir> — drop EVERY user-scope server, 
   # leave oauthAccount / projects / machineID and the file mode untouched.
   if [ "$name" = vanilla ] && [ -f "$HOME/.claude.json" ]; then
     clean_backup_take "$HOME/.claude.json" "$name/legacy-claude.json"
-    python3 - "$HOME/.claude.json" <<'PY'
+    # `|| die`: rewriting is the one step here that can leave the file damaged, so its failure must
+    # stop the run through our own error path. Unguarded, it would surface as a raw traceback and
+    # kill setup.sh via set -e — an unintentional exit, which the module's contract rules out.
+    python3 - "$HOME/.claude.json" <<'PY' || die "clean: cannot rewrite $HOME/.claude.json"
 import json, os, sys
 p = sys.argv[1]
 try:
     d = json.load(open(p))
 except Exception:
     sys.exit(0)
-if d.pop("mcpServers", None) is None:
+if "mcpServers" not in d:          # `not in`, not pop()-is-None: an explicit null must still be dropped
     sys.exit(0)
+del d["mcpServers"]
 tmp = p + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(d, f, indent=2)
-os.chmod(tmp, os.stat(p).st_mode & 0o777)
-os.replace(tmp, p)
+try:
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=2)
+    os.chmod(tmp, os.stat(p).st_mode & 0o777)
+    os.replace(tmp, p)
+except Exception as e:
+    sys.stderr.write(f"{e}\n")
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    sys.exit(1)
 PY
   fi
   return 0
