@@ -22,10 +22,15 @@ if printf 'y\nyes\n' | CLAUDEFILES_ASSUME_TTY=1 clean_wanted >/dev/null 2>&1; th
 printf 'y\nclean\n' | CLAUDEFILES_ASSUME_TTY=1 clean_wanted >/dev/null 2>&1 || { echo "FAIL confirmed-not-wanted"; exit 1; }
 # force answers the y/N question only; the word is still required
 printf 'clean\n' | CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 clean_wanted >/dev/null 2>&1 || { echo "FAIL force-not-wanted"; exit 1; }
-# the announcement names what survives, so the user can judge the blast radius
+# the announcement names what survives, so the user can judge the blast radius. The "removed"
+# assertion must be reachable ONLY through _CLEAN_PATHS: 'settings.json' and '.credentials.json'
+# are both hardcoded elsewhere in _clean_paths_announce's own format strings (settings.json.bak* in
+# one, the `kept:` line in the other), so asserting them passes even with _CLEAN_PATHS=(). Both
+# 'output-styles' and 'plugins' are in the array and appear nowhere else in the announcement.
 out="$(printf 'y\nclean\n' | CLAUDEFILES_ASSUME_TTY=1 clean_wanted 2>&1)"
 printf '%s' "$out" | grep -qF '.credentials.json' || { echo "FAIL announce-missing-kept"; exit 1; }
-printf '%s' "$out" | grep -qF 'settings.json'     || { echo "FAIL announce-missing-removed"; exit 1; }
+printf '%s' "$out" | grep -qF 'output-styles'     || { echo "FAIL announce-missing-array-output-styles"; exit 1; }
+printf '%s' "$out" | grep -qF 'plugins'           || { echo "FAIL announce-missing-array-plugins"; exit 1; }
 
 # --- clean_preflight: hard gates, because a clean profile is rebuilt from the network
 if (PATH="$h/empty-bin" clean_preflight) >/dev/null 2>&1; then echo "FAIL preflight-without-claude"; exit 1; fi
@@ -107,6 +112,15 @@ python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "mcpServers" n
 [ -f "$b/vanilla/plugins/config.json" ] || { echo "FAIL plugins-not-backed-up"; exit 1; }
 # a gstack dir OUTSIDE profile g is drift nobody reclones, so it must be recoverable
 [ -f "$b/vanilla/skills/gstack/foo/SKILL.md" ] || { echo "FAIL gstack-outside-g-not-backed-up"; exit 1; }
+# the profile's own .claude.json is backed up BEFORE its MCP servers are purged: a hand-added
+# server's definition can carry env secrets, and `mcp remove` is as destructive as any rm here
+[ -f "$b/vanilla/claude.json" ] || { echo "FAIL profile-claude-json-not-backed-up"; exit 1; }
+python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+assert set((d.get("mcpServers") or {}).keys()) == {"context7","stray"}, d' "$b/vanilla/claude.json" \
+  || { echo "FAIL profile-claude-json-backup-missing-servers"; exit 1; }
+# the legacy file is backed up too: closes a separately deferred finding
+[ -f "$b/vanilla/legacy-claude.json" ] || { echo "FAIL legacy-claude-json-not-backed-up"; exit 1; }
 
 # an already-clean directory is not an error: absent files are the normal steady state
 ( export CLAUDEFILES_TARGET="$d" CLAUDE_CONFIG_DIR="$d"; clean_profile vanilla ) >/dev/null \
@@ -197,6 +211,9 @@ python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{},"extra":{}}},
 out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF 'MCP servers differ' || { echo "FAIL mcp-drift-not-reported"; exit 1; }
 python3 -c 'import json,sys;json.dump({"mcpServers":{"context7":{}}},open(sys.argv[1],"w"))' "$vd/.claude.json"
+# restored to match the manifest: an implementation that warned unconditionally must not pass here
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'MCP servers differ' && { echo "FAIL mcp-drift-false-positive"; exit 1; }
 
 # a key the template does not own surviving in settings.json. Both directions, or the assertion
 # proves nothing: silent on a template-shaped file, loud once one extra key appears.

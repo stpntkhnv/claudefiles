@@ -39,12 +39,17 @@ _gstack_prune() { # <clone_dir> <skills_dir> — drop gstack skills outside the 
   return 0
 }
 
+# The repo and ref defaults, as accessors: lib/clean.sh's reachability probe needs the same
+# values without re-deriving them, so this is the one place either default lives.
+_gstack_repo() { echo "${CLAUDEFILES_GSTACK_REPO:-https://github.com/garrytan/gstack.git}"; }
+_gstack_ref()  { echo "${CLAUDEFILES_GSTACK_REF:-}"; }
+
 gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/unchanged, 1 = failed.
-  local repo="${CLAUDEFILES_GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
+  local repo; repo="$(_gstack_repo)"
   # Unset (the default) tracks upstream HEAD. Set to a tag/branch/SHA, the clone is held at that
   # revision instead: the upstream installer runs with the user's privileges, so a reviewed
   # revision must be pinnable. claudefiles owns WHERE gstack installs, not WHAT it does.
-  local ref="${CLAUDEFILES_GSTACK_REF:-}"
+  local ref; ref="$(_gstack_ref)"
   local target="${CLAUDEFILES_TARGET:-$HOME/.claude}"
   local dst="$target/skills/gstack" marker="$target/.gstack-setup-head"
   local remedy="if the clone is broken, remove it and re-run: rm -rf $dst"

@@ -101,8 +101,8 @@ _clean_gstack_reachable() {   # the g clone is deliberately NOT backed up (1.5G)
                               # it unless the CONFIGURED repo answers. clean_preflight probes github
                               # generally, which says nothing about a pinned or self-hosted gstack.
   [ "${CLAUDEFILES_CLEAN_SKIP_NET:-0}" = 1 ] && return 0
-  local repo="${CLAUDEFILES_GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
-  local ref="${CLAUDEFILES_GSTACK_REF:-}"
+  local repo; repo="$(_gstack_repo)"
+  local ref; ref="$(_gstack_ref)"
   if [ -n "$ref" ]; then
     timeout 30 git ls-remote --exit-code "$repo" "$ref" >/dev/null 2>&1 && return 0
     # a SHA pin resolves to no ref name, so it cannot be proven without cloning; settle for proving
@@ -123,6 +123,13 @@ print(" ".join((d.get("mcpServers") or {}).keys()))' "$1"
 
 _clean_mcp_purge() {   # <name> <profile_dir> — drop EVERY user-scope server, not just ours
   local name="$1" d="$2" n cb; cb="$(claude_bin)"
+  # Back up BEFORE removing anything: a hand-added server's definition can carry env secrets, and
+  # `mcp remove` is as destructive as any rm here. Both files first, then the loop, or a failing
+  # take would land after a deletion.
+  clean_backup_take "$d/.claude.json" "$name/claude.json"
+  if [ "$name" = vanilla ] && [ -f "$HOME/.claude.json" ]; then
+    clean_backup_take "$HOME/.claude.json" "$name/legacy-claude.json"
+  fi
   for n in $(_clean_mcp_names "$d/.claude.json"); do
     "$cb" mcp remove --scope user "$n" >/dev/null 2>&1 \
       || warn "clean: could not remove MCP server '$n' (mcp_apply reconciles next)"
@@ -131,7 +138,6 @@ _clean_mcp_purge() {   # <name> <profile_dir> — drop EVERY user-scope server, 
   # default profile; the CLI may write only to the profile dir, so drop that ONE key by hand and
   # leave oauthAccount / projects / machineID and the file mode untouched.
   if [ "$name" = vanilla ] && [ -f "$HOME/.claude.json" ]; then
-    clean_backup_take "$HOME/.claude.json" "$name/legacy-claude.json"
     # `|| die`: rewriting is the one step here that can leave the file damaged, so its failure must
     # stop the run through our own error path. Unguarded, it would surface as a raw traceback and
     # kill setup.sh via set -e — an unintentional exit, which the module's contract rules out.
@@ -140,14 +146,16 @@ import json, os, sys
 p = sys.argv[1]
 try:
     d = json.load(open(p))
-except Exception:
+except Exception as e:
+    sys.stderr.write(f"clean: {p} is not valid JSON, mcpServers left untouched: {e}\n")
     sys.exit(0)
 if "mcpServers" not in d:          # `not in`, not pop()-is-None: an explicit null must still be dropped
     sys.exit(0)
 del d["mcpServers"]
 tmp = p + ".tmp"
 try:
-    with open(tmp, "w") as f:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(d, f, indent=2)
     os.chmod(tmp, os.stat(p).st_mode & 0o777)
     os.replace(tmp, p)
