@@ -255,8 +255,11 @@ clean_backup_take() {   # <src> <rel_dest> — copy into the backup preserving m
   dst="$CLAUDEFILES_CLEAN_BACKUP/$rel"
   mkdir -p "$(dirname "$dst")" || die "clean: cannot create $(dirname "$dst")"
   # rm first: `cp -a src dir` where dir already exists copies INTO it, which would nest a second
-  # copy on a repeated take instead of replacing the first.
-  rm -rf "$dst"
+  # copy on a repeated take instead of replacing the first. The check is load-bearing, not
+  # defensive: an unwritable backup dir blocks unlink() here, yet `cp -a` would still succeed by
+  # truncating the existing file in place — so without it a failed backup silently reads as a good
+  # one and the source gets deleted anyway.
+  rm -rf "$dst" || die "clean: cannot remove existing backup at $dst"
   cp -a "$src" "$dst" || die "clean: backup of $src failed — refusing to delete anything"
   return 0
 }
