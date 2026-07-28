@@ -17,6 +17,28 @@ _gstack_fetch() { # <clone_dir> <ref>  — refresh the clone's objects; 0 = ok
   fi
 }
 
+# gstack ships ~57 skills covering its whole lifecycle, including /ship, /land-and-deploy and
+# /canary, which merge branches and deploy. Profile g exists for arguing about ideas, so it keeps
+# only the vision set. Override with CLAUDEFILES_GSTACK_SKILLS (space-separated names).
+_GSTACK_VISION_SKILLS="_gstack-command autoplan context-restore context-save cso design-consultation design-shotgun diagram investigate learn office-hours plan-ceo-review plan-design-review plan-devex-review plan-eng-review"
+
+_gstack_prune() { # <clone_dir> <skills_dir> — drop gstack skills outside the wanted set; always 0
+  local clone="$1" sdir="$2" name d removed=0
+  local keep=" ${CLAUDEFILES_GSTACK_SKILLS:-$_GSTACK_VISION_SKILLS} "
+  for d in "$sdir"/*/; do
+    [ -d "$d" ] || continue
+    name="${d%/}"; name="${name##*/}"
+    [ "$name" = gstack ] && continue                 # the clone itself
+    # Only ever remove something gstack published: a matching dir must exist in the clone. Our own
+    # skills and anything the user put here by hand have no counterpart there, so they survive.
+    [ -f "$clone/$name/SKILL.md" ] || continue
+    case "$keep" in *" $name "*) continue ;; esac
+    rm -rf "$d" && removed=$((removed + 1))
+  done
+  [ "$removed" -gt 0 ] && log "gstack: pruned $removed skill(s) outside the vision set"
+  return 0
+}
+
 gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/unchanged, 1 = failed.
   local repo="${CLAUDEFILES_GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
   # Unset (the default) tracks upstream HEAD. Set to a tag/branch/SHA, the clone is held at that
@@ -74,6 +96,9 @@ gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/uncha
 
   local head; head="$(git -C "$dst" rev-parse HEAD)" || { warn "gstack: cannot read clone HEAD"; return 1; }
   if [ -f "$marker" ] && [ "$(cat "$marker")" = "$head" ]; then
+    # Prune here too, not only after an install: the wanted set can change between runs, and the
+    # fast path is where most runs end up.
+    _gstack_prune "$dst" "$target/skills"
     log "gstack unchanged ($head)"; return 0
   fi
 
@@ -89,6 +114,7 @@ gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/uncha
   local secs="${CLAUDEFILES_GSTACK_TIMEOUT:-1800}" rc=0
   ( cd "$dst" && GSTACK_SKIP_FONTS=1 timeout "$secs" ./setup --host claude --no-team --no-plan-tune-hooks -q < /dev/null ) || rc=$?
   if [ "$rc" -eq 0 ]; then
+    _gstack_prune "$dst" "$target/skills"
     printf '%s' "$head" > "$marker" || { warn "gstack: cannot write marker $marker"; return 1; }
     log "gstack installed → $dst ($head)"
     return 0

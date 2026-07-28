@@ -21,12 +21,24 @@ mk_upstream() {
 # it reads one line of it. Fed /dev/null it sees EOF; fed a terminal it would block forever.
 if IFS= read -r _line; then _in="stdin: $_line"; else _in="stdin: eof"; fi
 { echo "args: $*"; echo "fonts: ${GSTACK_SKIP_FONTS:-unset}"; echo "$_in"; } >> "${GSTACK_FAKE_LOG:?}"
+# publish every skill dir into the parent skills/ dir, as the real installer does
+for _s in */; do
+  _s="${_s%/}"
+  [ -f "$_s/SKILL.md" ] || continue
+  mkdir -p "../$_s" && cp "$_s/SKILL.md" "../$_s/SKILL.md"
+done
 [ "${GSTACK_FAKE_FAIL:-0}" = "1" ] && exit 1
 # stands in for the real installer's browser download, which was observed stalling indefinitely
 [ -n "${GSTACK_FAKE_SLEEP:-}" ] && sleep "$GSTACK_FAKE_SLEEP"
 exit 0
 EOS
   chmod +x "$WORK/setup"; echo v1 > "$WORK/VERSION"
+  # skill dirs the way real gstack ships them: one per directory at the clone root, and the
+  # installer publishes each into the parent skills/ dir. office-hours is in the vision set,
+  # ship and canary are not.
+  for s in office-hours ship canary; do
+    mkdir -p "$WORK/$s"; printf -- '---\nname: %s\ndescription: fixture\n---\n' "$s" > "$WORK/$s/SKILL.md"
+  done
   git -C "$WORK" add -A
   git -C "$WORK" -c user.email=t@t -c user.name=t commit -qm init
   git clone -q --bare "$WORK" "$BARE"
@@ -212,6 +224,31 @@ chk "unknown pin leaves no marker"         [ ! -e "$hb/.claude-g/.gstack-setup-h
 chk "unknown pin is named in the warning" \
   bash -c 'grep -q "no-such-revision" <<<"$1"' _ "$out"
 unset CLAUDEFILES_GSTACK_REF
+
+# S: the profile keeps only the vision set. gstack ships ~57 skills including /ship, /canary and
+# /land-and-deploy, which merge branches and deploy — nothing that belongs in a profile meant for
+# arguing about ideas. Pruning must touch ONLY what gstack published: our own skills and anything
+# the user put there by hand have to survive.
+mkdir -p "$CLAUDEFILES_TARGET/skills/context7-mcp" "$CLAUDEFILES_TARGET/skills/my-own-skill"
+printf 'ours\n'  > "$CLAUDEFILES_TARGET/skills/context7-mcp/SKILL.md"
+printf 'users\n' > "$CLAUDEFILES_TARGET/skills/my-own-skill/SKILL.md"
+bump_upstream v-prune
+gstack_apply >/dev/null 2>&1; rc=$?
+chk "prune run returns 0"              [ "$rc" -eq 0 ]
+chk "vision skill kept"                [ -f "$CLAUDEFILES_TARGET/skills/office-hours/SKILL.md" ]
+chk "ship pruned"                      [ ! -e "$CLAUDEFILES_TARGET/skills/ship" ]
+chk "canary pruned"                    [ ! -e "$CLAUDEFILES_TARGET/skills/canary" ]
+chk "our own skill survives"           [ -f "$CLAUDEFILES_TARGET/skills/context7-mcp/SKILL.md" ]
+chk "user's own skill survives"        [ -f "$CLAUDEFILES_TARGET/skills/my-own-skill/SKILL.md" ]
+chk "the clone itself survives"        [ -d "$CLAUDEFILES_TARGET/skills/gstack/.git" ]
+# a second call must not thrash: nothing left to prune, still zero-exit
+gstack_apply >/dev/null 2>&1
+chk "prune is idempotent"              [ -f "$CLAUDEFILES_TARGET/skills/office-hours/SKILL.md" ]
+# the set is overridable
+CLAUDEFILES_GSTACK_SKILLS="ship" bump_upstream v-prune2
+CLAUDEFILES_GSTACK_SKILLS="ship" gstack_apply >/dev/null 2>&1
+chk "override keeps what it names"     [ -f "$CLAUDEFILES_TARGET/skills/ship/SKILL.md" ]
+chk "override drops the rest"          [ ! -e "$CLAUDEFILES_TARGET/skills/office-hours" ]
 
 # R: a stalled installer is killed instead of blocking setup.sh forever. Not hypothetical: a live
 # run of the real upstream stalled inside `bunx playwright install chromium` and sat for 12h with
