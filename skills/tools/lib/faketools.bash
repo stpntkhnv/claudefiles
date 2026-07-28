@@ -32,7 +32,9 @@ else
 fi
 S="$CLAUDE_FAKE_STATE"
 case "$1 $2" in
-  "plugin list")        cat "$S/plugins" 2>/dev/null ;;
+  "plugin list")        # CLAUDE_FAKE_NO_PLUGINS=1 -> nothing is ever reported installed, so a
+                        # recipe's self-verify fails while every other branch keeps working
+    [ "${CLAUDE_FAKE_NO_PLUGINS:-0}" = 1 ] || cat "$S/plugins" 2>/dev/null ;;
   "plugin marketplace")                                   # add <name> | list
     if [ "$3" = "add" ];  then grep -qxF "$4" "$S/marketplaces" 2>/dev/null || printf '%s\n' "$4" >> "$S/marketplaces"
     elif [ "$3" = "list" ]; then cat "$S/marketplaces" 2>/dev/null; fi ;;
