@@ -88,19 +88,38 @@ grep -q "mcp login linear" "$CLAUDE_FAKE_LOG" || { echo FAIL no-login-when-neede
 CLAUDE_FAKE_MCP_AUTH=ok CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-when-already-authed; exit 1; }
 
+# unrecognised status (wording changed, server wedged): warn instead of silently treating it as
+# fine or logging in. Must run before the drift case below removes the server from the fake state.
+: > "$CLAUDE_FAKE_LOG"
+CLAUDE_FAKE_MCP_AUTH=unknown CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla 2> "$h/linear-unknown.log"
+grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-on-unknown-status; exit 1; }
+grep -q "unexpected status" "$h/linear-unknown.log" || { echo FAIL no-warn-on-unknown-status; exit 1; }
+
 : > "$CLAUDE_FAKE_LOG"
 CLAUDEFILES_ASSUME_TTY=0 mcp_linear_login vanilla 2> "$h/linear-notty.log"
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-without-tty; exit 1; }
 grep -q "claude mcp login linear" "$h/linear-notty.log" || { echo FAIL no-manual-hint-without-tty; exit 1; }
 
+# CLI unavailable: override the resolver in a subshell so PATH (and the real claude it might
+# expose) is never touched. flags.linear is already true from above, so the flag gate doesn't
+# short-circuit before this branch is reached.
+: > "$CLAUDE_FAKE_LOG"
+( claude_bin() { echo "$h/no-such-claude"; }; mcp_linear_login vanilla ) 2> "$h/linear-nocli.log" \
+  || { echo FAIL login-nonzero-without-cli; exit 1; }
+grep -q "claude not available" "$h/linear-nocli.log" || { echo FAIL no-warn-without-cli; exit 1; }
+[ -s "$CLAUDE_FAKE_LOG" ] && { echo FAIL cli-called-when-unavailable; exit 1; }
+
 # drift: manifest present, server gone from the config -> `mcp get` exits non-zero. Don't log in,
 # don't die, but don't stay quiet either: silence here would report success on a broken Linear.
+# Assert on the "not in this profile's config" text, which ONLY the rc-nonzero branch emits —
+# the catch-all unknown-status warn below also mentions $fix, so asserting on the shared
+# "claude mcp login linear" tail would pass even with the rc-nonzero branch deleted.
 "$cb" mcp remove --scope user linear >/dev/null 2>&1 || true
 : > "$CLAUDE_FAKE_LOG"
 CLAUDEFILES_ASSUME_TTY=1 mcp_linear_login vanilla 2> "$h/linear-missing.log" \
   || { echo FAIL login-nonzero-on-missing-server; exit 1; }
 grep -q "mcp login" "$CLAUDE_FAKE_LOG" && { echo FAIL login-on-missing-server; exit 1; }
-grep -q "claude mcp login linear" "$h/linear-missing.log" || { echo FAIL no-warn-on-missing-server; exit 1; }
+grep -q "not in this profile's config" "$h/linear-missing.log" || { echo FAIL no-warn-on-missing-server; exit 1; }
 echo "ok linear-login-gate"
 
 echo "PASS test-mcp"

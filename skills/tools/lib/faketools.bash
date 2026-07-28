@@ -41,11 +41,14 @@ case "$1 $2" in
   "mcp add-json")       grep -qxF "$5" "$S/mcp" 2>/dev/null || printf '%s\n' "$5" >> "$S/mcp" ;;   # add-json --scope user NAME JSON; dedup so re-add is a no-op
   "mcp remove")                                            # mcp remove --scope user NAME
     grep -vxF "$5" "$S/mcp" > "$S/mcp.tmp" 2>/dev/null || true; mv "$S/mcp.tmp" "$S/mcp" 2>/dev/null || true ;;
-  "mcp get")            # the three real outcomes: needs auth, connected, no such server (non-zero)
+  "mcp get")            # outcomes: needs auth, connected, unrecognised status, no such server (non-zero)
     if grep -qxF "$3" "$S/mcp" 2>/dev/null; then
       printf '%s:\n  Scope: User config (available in all your projects)\n' "$3"
-      if [ "${CLAUDE_FAKE_MCP_AUTH:-needs}" = ok ]; then printf '  Status: \xe2\x9c\x94 Connected\n'
-      else printf '  Status: ! Needs authentication\n'; fi
+      case "${CLAUDE_FAKE_MCP_AUTH:-needs}" in
+        ok)      printf '  Status: \xe2\x9c\x94 Connected\n' ;;
+        unknown) printf '  Status: \xe2\x9c\x97 Failed to connect\n' ;;
+        *)       printf '  Status: ! Needs authentication\n' ;;
+      esac
     else
       printf 'No MCP server found with name: %s\n' "$3"; exit 1
     fi ;;
