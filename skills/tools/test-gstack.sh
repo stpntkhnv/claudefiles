@@ -22,6 +22,8 @@ mk_upstream() {
 if IFS= read -r _line; then _in="stdin: $_line"; else _in="stdin: eof"; fi
 { echo "args: $*"; echo "fonts: ${GSTACK_SKIP_FONTS:-unset}"; echo "$_in"; } >> "${GSTACK_FAKE_LOG:?}"
 [ "${GSTACK_FAKE_FAIL:-0}" = "1" ] && exit 1
+# stands in for the real installer's browser download, which was observed stalling indefinitely
+[ -n "${GSTACK_FAKE_SLEEP:-}" ] && sleep "$GSTACK_FAKE_SLEEP"
 exit 0
 EOS
   chmod +x "$WORK/setup"; echo v1 > "$WORK/VERSION"
@@ -210,6 +212,25 @@ chk "unknown pin leaves no marker"         [ ! -e "$hb/.claude-g/.gstack-setup-h
 chk "unknown pin is named in the warning" \
   bash -c 'grep -q "no-such-revision" <<<"$1"' _ "$out"
 unset CLAUDEFILES_GSTACK_REF
+
+# R: a stalled installer is killed instead of blocking setup.sh forever. Not hypothetical: a live
+# run of the real upstream stalled inside `bunx playwright install chromium` and sat for 12h with
+# zero bytes of progress. < /dev/null cannot help there — the process is not waiting on stdin.
+bump_upstream v-timeout-base
+gstack_apply >/dev/null 2>&1        # case N left no marker; establish a good one to compare against
+_prev_marker="$(cat "$CLAUDEFILES_TARGET/.gstack-setup-head")"
+[ -n "$_prev_marker" ] || { echo "FAIL timeout-case precondition: no marker to compare"; fails=1; }
+bump_upstream v-timeout
+_calls_before="$(setup_calls)"
+out="$(CLAUDEFILES_GSTACK_TIMEOUT=1 GSTACK_FAKE_SLEEP=30 gstack_apply 2>&1)"; rc=$?
+chk "stalled installer returns 1"           [ "$rc" -eq 1 ]
+chk "stalled installer was actually reached" [ "$(setup_calls)" -gt "$_calls_before" ]
+chk "timeout is named in the warning" \
+  bash -c 'grep -q "exceeded 1s" <<<"$1"' _ "$out"
+chk "timeout warning names the knob" \
+  bash -c 'grep -q "CLAUDEFILES_GSTACK_TIMEOUT" <<<"$1"' _ "$out"
+chk "stalled installer does not advance the marker" \
+  [ "$(cat "$CLAUDEFILES_TARGET/.gstack-setup-head")" = "$_prev_marker" ]
 
 unset CLAUDEFILES_TARGET CLAUDEFILES_GSTACK_REPO GSTACK_FAKE_LOG
 [ "$fails" -eq 0 ] && echo "PASS test-gstack" || { echo "SOME test-gstack CASES FAILED"; exit 1; }

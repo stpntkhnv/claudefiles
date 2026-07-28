@@ -83,11 +83,20 @@ gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/uncha
   # prompt at setup:1476; GSTACK_SKIP_FONTS=1 kills the sudo pacman font install at setup:312.
   # < /dev/null makes the non-interactive contract structural: the clone auto-updates, so an
   # upstream that renames a flag or adds a prompt must fail fast, never block on our stdin.
-  if ( cd "$dst" && GSTACK_SKIP_FONTS=1 ./setup --host claude --no-team --no-plan-tune-hooks -q < /dev/null ); then
+  # timeout bounds what stdin cannot: observed live, the installer's `bunx playwright install
+  # chromium` stalled mid-download and sat for 12h with zero progress, which would hang setup.sh
+  # forever. A wrong default beats an unbounded wait; the marker stays unwritten either way.
+  local secs="${CLAUDEFILES_GSTACK_TIMEOUT:-1800}" rc=0
+  ( cd "$dst" && GSTACK_SKIP_FONTS=1 timeout "$secs" ./setup --host claude --no-team --no-plan-tune-hooks -q < /dev/null ) || rc=$?
+  if [ "$rc" -eq 0 ]; then
     printf '%s' "$head" > "$marker" || { warn "gstack: cannot write marker $marker"; return 1; }
     log "gstack installed → $dst ($head)"
     return 0
   fi
-  warn "gstack: installer failed; marker left unchanged so the next run retries"
+  if [ "$rc" -eq 124 ]; then
+    warn "gstack: installer exceeded ${secs}s and was killed (it downloads a browser; a stalled download hangs forever). Raise CLAUDEFILES_GSTACK_TIMEOUT or re-run"
+  else
+    warn "gstack: installer failed (exit $rc); marker left unchanged so the next run retries"
+  fi
   return 1
 }
