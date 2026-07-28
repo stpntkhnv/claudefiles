@@ -206,11 +206,13 @@ clean_global >/dev/null
 [ "$(stat -c %a "$b/global/secrets.json")" = 600 ] || { echo "FAIL backup-secrets-mode"; exit 1; }
 [ -f "$b/global/managed-mcp.vanilla.json" ] || { echo "FAIL manifest-not-backed-up"; exit 1; }
 
-# fail-closed: a backup that cannot be written must abort BEFORE anything is deleted
+# fail-closed: a backup that cannot be written must abort BEFORE anything is deleted.
+# The DESTINATION dir is what must be unwritable — chmod-ing the backup root would not do it,
+# since global/ already exists and mkdir -p plus a write inside it would both still succeed.
 printf '{"flags":{}}' > "$CLAUDEFILES_CONFIG_DIR/secrets.json"
-chmod 500 "$b"
-if (clean_global) >/dev/null 2>&1; then chmod 700 "$b"; echo "FAIL backup-not-fail-closed"; exit 1; fi
-chmod 700 "$b"
+chmod 500 "$b/global"
+if (clean_global) >/dev/null 2>&1; then chmod 700 "$b/global"; echo "FAIL backup-not-fail-closed"; exit 1; fi
+chmod 700 "$b/global"
 [ -f "$CLAUDEFILES_CONFIG_DIR/secrets.json" ] || { echo "FAIL deleted-despite-backup-failure"; exit 1; }
 
 # taking a missing source is a no-op, not a failure: absent files are the normal case
@@ -289,7 +291,7 @@ git commit -m "feat(clean): fail-closed backup and global state wipe"
 
 **Interfaces:**
 - Consumes: `claude_bin` (`lib/common.sh:6`), `CLAUDEFILES_TARGET`, `clean_backup_take`.
-- Produces: `clean_profile <name>` (0 = вычищено, 1 = отказ или ошибка), `_clean_have_bun` (переопределяемая в тестах), `_clean_mcp_names <claude_json>`, `_clean_backup_skills <dir> <name>`, `_clean_mcp_purge <name> <dir>`.
+- Produces: `clean_profile <name>` (0 = вычищено, 1 = отказ или ошибка), `_clean_have_bun` (переопределяемая в тестах), `_clean_gstack_reachable`, `_clean_mcp_names <claude_json>`, `_clean_backup_skills <dir> <name>`, `_clean_mcp_purge <name> <dir>`.
 
 - [ ] **Step 1: Написать падающий тест**
 
@@ -338,7 +340,8 @@ python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "mcpServers" n
 [ -f "$b/vanilla/skills/ges-esp/SKILL.md" ] || { echo "FAIL stray-not-backed-up"; exit 1; }
 [ -f "$b/vanilla/CLAUDE.md" ] || { echo "FAIL claudemd-not-backed-up"; exit 1; }
 [ -f "$b/vanilla/plugins/config.json" ] || { echo "FAIL plugins-not-backed-up"; exit 1; }
-[ -e "$b/vanilla/skills/gstack" ] && { echo "FAIL gstack-clone-copied-into-backup"; exit 1; }
+# a gstack dir OUTSIDE profile g is drift nobody reclones, so it must be recoverable
+[ -f "$b/vanilla/skills/gstack/foo/SKILL.md" ] || { echo "FAIL gstack-outside-g-not-backed-up"; exit 1; }
 
 # an already-clean directory is not an error: absent files are the normal steady state
 ( export CLAUDEFILES_TARGET="$d" CLAUDE_CONFIG_DIR="$d"; clean_profile vanilla ) >/dev/null \
@@ -355,6 +358,26 @@ if ( export CLAUDEFILES_TARGET="$gd" CLAUDE_CONFIG_DIR="$gd"; clean_profile g ) 
 [ -f "$gd/.gstack-setup-head" ] || { echo "FAIL g-marker-removed-without-bun"; exit 1; }
 [ -f "$gd/settings.json" ] || { echo "FAIL g-settings-removed-without-bun"; exit 1; }
 unset -f _clean_have_bun
+
+# profile g whose configured gstack repo does not resolve: same refusal. clean_preflight probes
+# github in general, which proves nothing about a pinned or self-hosted gstack, and the clone is
+# the one artifact deliberately left out of the backup.
+if ( export CLAUDEFILES_TARGET="$gd" CLAUDE_CONFIG_DIR="$gd" \
+            CLAUDEFILES_CLEAN_SKIP_NET=0 CLAUDEFILES_GSTACK_REPO="file://$h/no-such-repo.git"
+     clean_profile g ) >/dev/null 2>&1; then echo "FAIL g-cleaned-with-unreachable-gstack"; exit 1; fi
+[ -d "$gd/skills/gstack" ] || { echo "FAIL g-clone-removed-with-unreachable-gstack"; exit 1; }
+
+# fail-closed for a PROFILE, not only for the global wipe: if a backup copy dies mid-way, the
+# profile must still be whole. Two passes (copy everything, then delete) are what guarantee it.
+fd="$h/.claude-fc"; mkdir -p "$fd/skills/keep"
+printf 'S' > "$fd/settings.json"; printf 'M' > "$fd/CLAUDE.md"; printf 'K' > "$fd/skills/keep/SKILL.md"
+mkdir -p "$b/vanilla"; chmod 500 "$b/vanilla"
+if ( export CLAUDEFILES_TARGET="$fd" CLAUDE_CONFIG_DIR="$fd"; clean_profile vanilla ) >/dev/null 2>&1; then
+  chmod 700 "$b/vanilla"; echo "FAIL profile-clean-not-fail-closed"; exit 1; fi
+chmod 700 "$b/vanilla"
+[ -f "$fd/settings.json" ] || { echo "FAIL settings deleted despite a failed backup"; exit 1; }
+[ -f "$fd/CLAUDE.md" ] || { echo "FAIL CLAUDE.md deleted despite a failed backup"; exit 1; }
+[ -f "$fd/skills/keep/SKILL.md" ] || { echo "FAIL skills deleted despite a failed backup"; exit 1; }
 ```
 
 - [ ] **Step 2: Запустить тест, убедиться что падает**
@@ -368,6 +391,22 @@ Expected: FAIL, `clean_profile: command not found`.
 
 ```bash
 _clean_have_bun() { command -v bun >/dev/null 2>&1; }   # a seam: tests shadow this instead of PATH
+
+_clean_gstack_reachable() {   # the g clone is deliberately NOT backed up (1.5G), so refuse to delete
+                              # it unless the CONFIGURED repo answers. clean_preflight probes github
+                              # generally, which says nothing about a pinned or self-hosted gstack.
+  [ "${CLAUDEFILES_CLEAN_SKIP_NET:-0}" = 1 ] && return 0
+  local repo="${CLAUDEFILES_GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
+  local ref="${CLAUDEFILES_GSTACK_REF:-}"
+  if [ -n "$ref" ]; then
+    timeout 30 git ls-remote --exit-code "$repo" "$ref" >/dev/null 2>&1 && return 0
+    # a SHA pin resolves to no ref name, so it cannot be proven without cloning; settle for proving
+    # the repo itself answers, which is still strictly better than deleting blind.
+    timeout 30 git ls-remote "$repo" >/dev/null 2>&1 && return 0
+    return 1
+  fi
+  timeout 30 git ls-remote "$repo" HEAD >/dev/null 2>&1
+}
 
 _clean_mcp_names() {   # <claude_json> — whitespace-separated user-scope server names, "" if none
   [ -f "$1" ] || return 0
@@ -407,12 +446,14 @@ PY
   return 0
 }
 
-_clean_backup_skills() {   # <profile_dir> <name> — back up skills/ EXCEPT the gstack clone: 1.5G of
-  local d="$1" name="$2" s base   # node_modules that git+bun rebuild, versus KBs of real config.
+_clean_backup_skills() {   # <profile_dir> <name> — back up skills/, skipping the gstack clone ONLY
+                           # in profile g, where the recipe reclones it. A gstack dir anywhere else
+                           # is drift nobody promised to rebuild, so it gets backed up like the rest.
+  local d="$1" name="$2" s base
   for s in "$d"/skills/* "$d"/skills/.[!.]*; do
     [ -e "$s" ] || [ -L "$s" ] || continue
     base="$(basename "$s")"
-    [ "$base" = gstack ] && continue
+    [ "$base" = gstack ] && [ "$name" = g ] && continue
     clean_backup_take "$s" "$name/skills/$base"
   done
   return 0
@@ -422,21 +463,33 @@ clean_profile() {   # <name> — phase B, inside provision_selected's subshell, 
                     # 0 = wiped, 1 = refused or failed (the profile then goes to PROVISION_FAILED:
                     # a half-wiped, half-rebuilt profile is worse than an honest failure).
   local name="$1" d="${CLAUDEFILES_TARGET:-$HOME/.claude}" p f
-  if [ "$name" = g ] && ! _clean_have_bun; then
-    warn "clean: profile g needs bun to reinstall gstack — refusing to wipe it (sudo pacman -S --needed bun)"
-    return 1
+  local -a doomed=()
+  if [ "$name" = g ]; then
+    _clean_have_bun \
+      || { warn "clean: profile g needs bun to reinstall gstack — refusing to wipe it (sudo pacman -S --needed bun)"; return 1; }
+    _clean_gstack_reachable \
+      || { warn "clean: gstack repo/revision does not resolve — refusing to wipe a clone that is not backed up"; return 1; }
   fi
-  _clean_mcp_purge "$name" "$d"
   for p in "${_CLEAN_PATHS[@]}"; do
     [ -e "$d/$p" ] || [ -L "$d/$p" ] || continue
-    if [ "$p" = skills ]; then _clean_backup_skills "$d" "$name"
-    else clean_backup_take "$d/$p" "$name/$p"; fi
-    rm -rf "$d/$p" || { warn "clean: cannot remove $d/$p"; return 1; }
+    doomed+=("$d/$p")
   done
   for f in "$d"/settings.json.bak*; do
-    [ -e "$f" ] || continue
-    clean_backup_take "$f" "$name/$(basename "$f")"
-    rm -f "$f" || { warn "clean: cannot remove $f"; return 1; }
+    [ -e "$f" ] && doomed+=("$f")
+  done
+  # PASS 1 — back everything up first. clean_backup_take dies on failure, so a broken backup aborts
+  # the run with the profile still WHOLE. Interleaving copy and delete would leave the profile
+  # half-destroyed the moment a later copy fails, which is the one state with no way back.
+  for p in "${doomed[@]}"; do
+    case "$(basename "$p")" in
+      skills) _clean_backup_skills "$d" "$name" ;;
+      *)      clean_backup_take "$p" "$name/$(basename "$p")" ;;
+    esac
+  done
+  _clean_mcp_purge "$name" "$d"          # after the backups: it mutates .claude.json files too
+  # PASS 2 — delete.
+  for p in "${doomed[@]}"; do
+    rm -rf "$p" || { warn "clean: cannot remove $p"; return 1; }
   done
   log "clean: $name wiped — the recipe rebuilds it from the repo"
   return 0
@@ -466,7 +519,7 @@ git commit -m "feat(clean): wipe a profile's config surface, keep credentials an
 - Modify: `skills/tools/test-clean.sh`
 
 **Interfaces:**
-- Consumes: `profile_dir`, `_mcp_manifest` (`lib/mcp.sh:2`), `config_flag`, `_has_token` (`lib/common.sh:11`), `claude_bin`.
+- Consumes: `profile_dir`, `_mcp_manifest` (`lib/mcp.sh:2`), `_has_token` (`lib/common.sh:11`), `claude_bin`.
 - Produces: `clean_verify <name> <repo_root>` (всегда 0, печатает `warn` на каждое расхождение), `clean_warn_unselected <selected...>` (всегда 0).
 
 - [ ] **Step 1: Написать падающий тест**
@@ -506,9 +559,10 @@ python3 -c 'import json,sys;json.dump({"model":"x","junk":1},open(sys.argv[1],"w
 out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF 'settings.json keys' || { echo "FAIL settings-drift-not-reported"; exit 1; }
 
-# plugins: coverage of what the flags demand. plugins_apply swallows install errors, and after a
-# clean the plugins/ dir is gone, so a silent loss must be visible here.
+# plugins: coverage of what the profile's own enabledPlugins declares. plugins_apply swallows
+# install errors, and after a clean the plugins/ dir is gone, so a silent loss must be visible here.
 sd="$h/.claude-super"; mkdir -p "$sd/skills"
+python3 -c 'import json,sys;json.dump({"enabledPlugins":{"superpowers@claude-plugins-official":True,"dotnet@dotnet-agent-skills":True}},open(sys.argv[1],"w"))' "$sd/settings.json"
 : > "$CLAUDE_FAKE_STATE/plugins"
 out="$(clean_verify super "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF "plugin 'superpowers@claude-plugins-official' is NOT installed" \
@@ -575,12 +629,17 @@ sys.exit(0 if t==o else 1)' "$tmpl" "$d/settings.json" \
   fi
   # 5. plugin COVERAGE (expected ⊆ installed), not equality: Claude Code auto-installs the official
   #    marketplace by itself, and reporting that as drift would train the user to ignore the report.
+  #    The expected set is read from the profile's OWN enabledPlugins, freshly written from the
+  #    template and already flag-gated by jsonmerge.py — so the "which plugins does this profile
+  #    want" logic is never duplicated here and cannot go stale.
   local want_plugins=()
-  if [ "$name" = super ]; then
-    want_plugins+=("superpowers@claude-plugins-official")
-    [ "$(config_flag dotnet_skills)" = true ] && want_plugins+=("dotnet@dotnet-agent-skills")
-    [ "$(config_flag codex_review)" = true ] && [ "$(config_flag codex_plugin)" = true ] \
-      && want_plugins+=("codex@openai-codex")
+  if [ -f "$d/settings.json" ]; then
+    while read -r w; do
+      [ -n "$w" ] && want_plugins+=("$w")
+    done < <(python3 -c 'import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print("\n".join((d.get("enabledPlugins") or {}).keys()))' "$d/settings.json")
   fi
   if [ "${#want_plugins[@]}" -gt 0 ]; then
     listing="$(env CLAUDE_CONFIG_DIR="$d" "$cb" plugin list 2>/dev/null || true)"
@@ -646,8 +705,13 @@ git commit -m "feat(clean): audit the end state, catch silently lost plugins"
 # Plant exactly the junk a clean install exists to remove, then answer every question the way the
 # seeded secrets.json was configured: same answers -> byte-identical result, which is what makes
 # the diffs below meaningful.
-mkdir -p "$h/.claude/skills/ges-esp" "$h/.claude/rules"
+# Every SELECTED profile gets drift planted: asserting only vanilla would pass even if the wiring
+# cleaned vanilla and silently skipped super and g.
+mkdir -p "$h/.claude/skills/ges-esp" "$h/.claude/rules" \
+         "$h/.claude-super/skills/ges-esp" "$h/.claude-g/skills/ges-esp"
 printf 'STRAY' > "$h/.claude/skills/ges-esp/SKILL.md"
+printf 'STRAY' > "$h/.claude-super/skills/ges-esp/SKILL.md"
+printf 'STRAY' > "$h/.claude-g/skills/ges-esp/SKILL.md"
 printf 'RULE'  > "$h/.claude/rules/context7.md"
 printf 'BAK'   > "$h/.claude/settings.json.bak.20260101-000000"
 python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));d["junkKey"]=1;json.dump(d,open(p,"w"))' "$h/.claude/settings.json"
@@ -662,6 +726,8 @@ printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\n\n\n\n' | \
   CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 CLAUDEFILES_CLEAN_SKIP_NET=1 bash "$cf/setup.sh"
 
 [ -e "$h/.claude/skills/ges-esp" ] && { echo "FAIL clean kept a stray skill"; exit 1; }
+[ -e "$h/.claude-super/skills/ges-esp" ] && { echo "FAIL clean skipped the super profile"; exit 1; }
+[ -e "$h/.claude-g/skills/ges-esp" ] && { echo "FAIL clean skipped the g profile"; exit 1; }
 [ -e "$h/.claude/rules" ] && { echo "FAIL clean kept rules/"; exit 1; }
 [ -e "$h/.claude/settings.json.bak.20260101-000000" ] && { echo "FAIL clean kept a settings backup"; exit 1; }
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "junkKey" not in d,d' "$h/.claude/settings.json" \
