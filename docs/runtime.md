@@ -9,16 +9,16 @@ flowchart TD
     snd["звук: Stop и Notification -> paplay ready.wav"]
   end
   subgraph vanillaonly["Только vanilla"]
-    vmcp["MCP: только context7, безусловно"]
+    vmcp["MCP: context7 безусловно + linear по флагу"]
   end
   subgraph superonly["Только super"]
     hook["SessionStart: detect-dotnet.sh (.NET nudge)"]
     plug["плагины: superpowers, dotnet, codex"]
-    smcp["MCP по флагам: context7, playwright, azure, ADO"]
+    smcp["MCP по флагам: context7, playwright, azure, ADO, linear"]
   end
   subgraph gonly["Только g"]
     gskills["gstack-скиллы (23 роли, ~50 файлов)"]
-    gmcp["MCP: только context7, безусловно"]
+    gmcp["MCP: context7 безусловно + linear по флагу"]
     gnohook["без SessionStart-хука"]
   end
   van["claude -> vanilla"] --> shared
@@ -32,4 +32,4 @@ flowchart TD
 - **statusline** (statusline.sh): бейдж профиля из аргумента настроек или из `CLAUDE_CONFIG_DIR`; cyan=vanilla, magenta=super, green=g, yellow=прочее.
 - **звук** (все три шаблона, `paplay` на Stop и Notification; vanilla:11 / super:25 / g:13): `ready.wav`.
 - **SessionStart** (только super): `detect-dotnet.sh` ищет .NET в дереве и подсказывает `dotnet-router`; у g этого хука нет.
-- **MCP**: vanilla и g всегда только context7 (build_servers.py:23-28); super: флаг-гейтед набор, куда context7 входит тоже по флагу (build_servers.py:29-46).
+- **MCP**: vanilla и g всегда получают context7 и, по флагу `linear`, Linear (ветка `if profile in ("vanilla", "g")` в `build_servers.py`); super — флаг-гейтед набор, куда context7 входит тоже по флагу. Linear единственный не-stdio сервер: удалённый HTTP плюс разовый `claude mcp login linear`, который `setup.sh` предлагает сам.

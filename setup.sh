@@ -50,6 +50,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
   if [ "$(config_flag context7)" = true ]; then
     config_ensure_optional context7_api_key "Context7 API key (empty = free tier)" --secret
   fi
+  config_ensure_flag linear        "Enable Linear MCP (issue tracker, one-time OAuth login)? (y/N)"
 }
 config_ensure_all
 
@@ -96,4 +97,15 @@ if [ "${#failed[@]}" -gt 0 ]; then
   warn "profiles failed: ${failed[*]}"; exit 1
 fi
 if [ "$CLEAN" = true ]; then log "clean: backup kept at $CLAUDEFILES_CLEAN_BACKUP"; fi
+
+# After the failed-profile gate on purpose: if a profile is broken, an OAuth browser flow is the
+# last thing the user needs. Each profile in its own subshell, exactly like provision_selected —
+# `claude mcp login` targets whatever CLAUDE_CONFIG_DIR points at.
+if [ "$(config_flag linear)" = true ]; then
+  log "linear auth"
+  for p in "${selected[@]}"; do
+    ( export CLAUDE_CONFIG_DIR="$(profile_dir "$p")"; mcp_linear_login "$p" )
+  done
+fi
+
 log "Done. \`claude\` = vanilla$( [ "$super_sel" = true ] && printf '%s' '; `claude-super` = full stack' )$( [ "$g_sel" = true ] && printf '%s' '; `claude-g` = gstack (vision)' )."
