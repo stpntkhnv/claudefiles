@@ -8,10 +8,15 @@
 # eventually eat credentials or transcripts. settings.json.bak* is a glob, handled separately.
 _CLEAN_PATHS=(settings.json settings.local.json CLAUDE.md skills plugins rules agents commands output-styles .gstack-setup-head)
 
+# Manifests are mcp.sh's artifact, so their location comes from mcp.sh. _mcp_manifest takes one
+# profile name and cannot express "all of them, legacy included", which is what both the
+# announcement and the wipe need — derive the directory from the module instead of re-deriving it.
+_clean_manifest_dir() { dirname "$(_mcp_legacy)"; }
+
 _clean_paths_announce() {   # what the user is about to lose, and what they keep
   local p d
   log "clean install will remove:"
-  printf '  %s\n' "$(config_path)" "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-mcp*.json"
+  printf '  %s\n' "$(config_path)" "$(_clean_manifest_dir)/managed-mcp*.json"
   printf '  in every profile you select next: %s, settings.json.bak*, and every user-scope MCP server\n' "${_CLEAN_PATHS[*]}"
   for p in vanilla super g; do
     d="$(profile_dir "$p")"; [ -d "$d" ] && printf '  on disk now: %s\n' "$d"
