@@ -25,11 +25,15 @@
    - `claude.md` — рецепт super при `codex_review=true` вписывает codex-наж marker-блоком; рецепт vanilla вместо него вписывает личный marker-блок со стилем письма. Рецепт `g` пишет и личный marker-блок, и marker-блок про видение (`docs/vision/`) в роли producer; рецепт super пишет тот же блок в роли consumer, если выбран `profile_gstack`, иначе снимает его. Все идемпотентны и сохраняют остальное содержимое файла.
    - `plugins` (только рецепт super) — идемпотентно ставит `superpowers@claude-plugins-official` (всегда для super), при `dotnet_skills=true` — `dotnet@dotnet-agent-skills`, при эффективном `codex_review && codex_plugin` — `codex@openai-codex`; добавляет их marketplace при отсутствии (гварды: повторный запуск — no-op).
    - `gstack` (только рецепт `g`) — клонирует/обновляет апстрим gstack в `skills/gstack` и гоняет его инсталлятор, когда HEAD сдвинулся (подробности — в разделе «Профиль g (этап видения)» ниже); провал роняет только профиль `g`.
-   - `mcp` — сверяет user-scope MCP-серверы каталога профиля с его собственным манифестом (`managed-mcp.<profile>.json`): vanilla и g всегда получают `context7` плюс `linear` по флагу, super — набор по своим флагам; чужие/неуправляемые серверы не трогает. На дефолтном каталоге первый прогон подхватывает legacy `managed-mcp.json` как «прошлый манифест» и снимает старые super-серверы. Linear единственный удалённый сервер в наборе: `claude mcp add-json` кладёт его в конфиг, но работать он начинает после разового `claude mcp login linear`. Отдельная фаза после провижна проверяет `claude mcp get linear` и предлагает вход только когда CLI сам сказал `Needs authentication` — на авторизованной машине она молчит, без TTY печатает команду.
+   - `mcp` — сверяет user-scope MCP-серверы каталога профиля с его собственным манифестом (`managed-mcp.<profile>.json`): vanilla и g всегда получают `context7` плюс `linear` по флагу, super — набор по своим флагам; чужие/неуправляемые серверы не трогает. На дефолтном каталоге первый прогон подхватывает legacy `managed-mcp.json` как «прошлый манифест» и снимает старые super-серверы. Linear единственный удалённый сервер в наборе — `claude mcp add-json` кладёт его в конфиг, но включается он отдельной фазой ниже, после того как все профили провижнуты.
    - после успешного рецепта — симлинк `.credentials.json` и wrapper `~/.local/bin/claude-<profile>` (оба — только для не-дефолтных каталогов).
 5. **verify** — валидирует `settings.json` каждого выбранного профиля через `python3 -m json.tool`; не фатально.
 
-Провал раскатки одного профиля не рушит остальные, но агрегируется в non-zero выход `setup.sh`. Запущенный дважды `setup.sh` не даёт diff ни в одном каталоге и выходит 0.
+Провал раскатки одного профиля не рушит остальные, но агрегируется: если хоть один профиль упал, `setup.sh` печатает список и выходит `exit 1` — **до** следующего шага, потому что упавший профиль не место для браузерного OAuth-логина.
+
+6. **linear auth** — только при `flags.linear=true` и только если предыдущий шаг не остановил прогон: для каждого выбранного профиля, в своей подоболочке с `CLAUDE_CONFIG_DIR`, указывающим на его каталог, `mcp_linear_login` смотрит на `claude mcp get linear` и решает по статусу — сервер найден, нужна авторизация, есть TTY → открывает браузер (`claude mcp login linear`); сервер найден и уже авторизован → молчит; сервер найден, нужна авторизация, TTY нет (например, SSH-сессия без иксов) → печатает ручную команду; сервер отсутствует в конфиге профиля (дрейф манифеста), проверка статуса не уложилась в таймаут, или статус не распознан → предупреждает и продолжает. Ни одна ветка не роняет `setup.sh`. По SSH `_has_tty` истинна, а браузера нет — в такой сессии логиньтесь вручную командой `claude mcp login linear --no-browser`.
+
+Запущенный дважды `setup.sh` не даёт diff ни в одном каталоге и выходит 0.
 
 ## Системные зависимости
 
@@ -114,6 +118,12 @@ cp -a ~/.config/claudefiles/clean-backups/<время>/<профиль>/. ~/.cla
 - **`secrets.json`** — флаги (`profile_super`, `profile_gstack`, `context7`, `linear`, `playwright`, `azure_mcp`, `ado`, `dotnet_skills`, `codex_review`, `codex_plugin`), `context7_api_key`, ADO email/orgs/PAT-ы. Заполняется prompt-once при TTY. Авторизацию Codex (`~/.codex/auth.json`) и OAuth-токен Linear claudefiles **не** трогает — это `codex login` и `claude mcp login linear`.
 - **`managed-mcp.<profile>.json`** — манифест применённых MCP-серверов профиля (для сверки и удаления ровно своего); содержит base64-PAT для ADO (в профиле super), поэтому тоже `600`. Legacy `managed-mcp.json` (из до-профильной раскладки) потребляется один раз при миграции дефолтного каталога и затем удаляется.
 
+Миграция на существующей машине: `linear` — такой же обязательный флаг, как `profile_gstack`: `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`) падает с `missing required flag 'flags.linear'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
+```bash
+python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
+  ~/.config/claudefiles/secrets.json flags.linear false
+```
+
 Тест гарантирует, что ни один секретный путь не трекается; репозиторий **публичный**.
 
 ## dotnet-router (одна из компонент)
@@ -169,18 +179,13 @@ cp -a ~/.config/claudefiles/clean-backups/<время>/<профиль>/. ~/.cla
   python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
     ~/.config/claudefiles/secrets.json flags.profile_gstack false
   ```
-- **Миграция на существующей машине: `linear`.** Такой же обязательный флаг, как `profile_gstack`: `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`) падает с `missing required flag 'flags.linear'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
-  ```bash
-  python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
-    ~/.config/claudefiles/secrets.json flags.linear false
-  ```
 - **`~/.gstack` не под управлением claudefiles.** Это домашний каталог самого инструмента gstack (`config.yaml`, аналитика, `projects/`), а не Claude Code; `gstack-config`, `gstack-analytics`, `gstack-uninstall` пользователь запускает сам, без переменных окружения claudefiles.
 - Выключение `profile_gstack` не удаляет `~/.claude-g` — симметрично с `profile_super`/`~/.claude-super`; каталог просто перестаёт обновляться. Ручная чистка: `gstack-uninstall`, затем `rm -rf ~/.claude-g && rm -f ~/.local/bin/claude-g`.
 
 ## Раскладка
 
 ```
-setup.sh                      # оркестратор: preflight → config → deps → профили (vanilla + super + g) → verify
+setup.sh                      # оркестратор: preflight → config → deps → профили (vanilla + super + g) → verify → linear auth
 lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, claudemd, gstack, profiles, common, apply-if-changed
 lib/py/                       # config_io.py, jsonmerge.py
 claude/settings/              # settings.vanilla.template.json + settings.super.template.json + settings.g.template.json (управляемые ключи профиля)

@@ -37,14 +37,18 @@ flowchart TD
   setup --> deps
   setup --> config
   setup --> cleanm
+  setup --> mcp
   prof --> settings & skills & plugins & mcp & claudemd
   prof --> gstack
   prof --> cleanm
   settings --> jsonmerge
   prof --> config
+  mcp --> config
   config --> configio
   deps -.->|исключение| config
 ```
+
+`setup --> mcp` — единственный appliers-модуль, вызываемый оркестратором в обход `prof`: фаза `linear auth` зовёт `mcp_linear_login` напрямую (`setup.sh`, после verify), а не через рецепт профиля. Отсюда же `mcp --> config`: `mcp_linear_login` читает `config_flag` и `_has_tty` (mcp.sh:40,51).
 
 ## Потоки данных
 
@@ -63,7 +67,7 @@ flowchart LR
 
 ## Прогон setup.sh
 
-Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:95-96).
+Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:95-96). После verify и этого exit 1 — отдельная фаза `linear auth` (только при `flags.linear=true`): `mcp_linear_login` за раз на каждый выбранный профиль, в его собственном `CLAUDE_CONFIG_DIR`; она никогда не роняет прогон, только warn.
 
 ```mermaid
 sequenceDiagram
@@ -85,7 +89,7 @@ sequenceDiagram
   U->>P: provision_selected(vanilla, super, g)
   loop каждый профиль (субшелл: TARGET, CONFIG_DIR)
     opt чистая установка
-      P->>P: clean_profile (снос конфиг-поверхности; g без bun = отказ)
+      P->>P: clean_profile (снос конфиг-поверхности, g без bun = отказ)
     end
     P->>R: recipe_vanilla / recipe_super / recipe_g
     R->>M: settings, skills, claudemd, [plugins], [gstack], mcp
@@ -100,6 +104,12 @@ sequenceDiagram
   U->>U: verify (json.tool каждого settings.json)
   opt есть упавшие профили
     U-->>U: warn список + exit 1
+  end
+  opt flags.linear == true (и не было exit 1 выше)
+    loop каждый выбранный профиль (субшелл: CONFIG_DIR)
+      U->>M: mcp_linear_login(profile)
+      M-->>U: warn (дрейф манифеста / таймаут проверки / needs-auth без TTY / неопознанный статус) ИЛИ browser-логин (needs-auth + TTY) ИЛИ тихо (Connected) — никогда не роняет прогон
+    end
   end
 ```
 

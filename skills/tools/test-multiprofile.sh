@@ -118,6 +118,10 @@ done
 python3 "$cf/lib/py/config_io.py" setbool "$h3/.config/claudefiles/secrets.json" flags.linear true
 
 # a failed profile -> setup.sh exits 1 BEFORE the login phase
+# KEEP THIS BLOCK LAST: it deliberately forces profile `super`'s self-verify to fail
+# (CLAUDE_FAKE_NO_PLUGINS=1 suppresses `plugin list` for this one invocation only, per P1a in
+# lib/profiles.sh), so this run of setup.sh exits non-zero. Nothing here is restored afterward —
+# anything appended below would run against a fixture whose last setup.sh call just exited 1.
 : > "$CLAUDE_FAKE_LOG"
 CLAUDE_FAKE_NO_PLUGINS=1 CLAUDEFILES_ASSUME_TTY=1 bash "$cf/setup.sh" < /dev/null \
   && { echo FAIL expected-exit-1-on-failed-profile; exit 1; }
