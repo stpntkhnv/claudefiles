@@ -39,9 +39,16 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$h/bin/bun"; chmod +x "$h/bin/bun"; ha
 # seed non-interactive config so no prompt is needed
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
-{ "flags": {"profile_super":true,"profile_gstack":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false,"linear":false},
+{ "flags": {"profile_super":true,"profile_gstack":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false,"linear":false,"kb":true},
+  "kb": {"vault_path": "SET-BELOW"},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
+# The vault has to live inside the fixture HOME, and a quoted heredoc expands nothing.
+python3 - "$h/.config/claudefiles/secrets.json" "$h/kb" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["kb"]["vault_path"]=sys.argv[2]
+json.dump(d, open(p,"w"), indent=2)
+PY
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 cp "$h/.claude/settings.json" "$h/first.json"
 cp "$h/.claude-super/settings.json" "$h/first-super.json"
@@ -58,6 +65,15 @@ diff "$h/first-super.json" "$h/.claude-super/settings.json" || { echo "FAIL supe
 diff "$h/first-claudemd.md" "$h/.claude/CLAUDE.md" || { echo "FAIL CLAUDE.md not idempotent"; exit 1; }
 diff "$h/first-super-claudemd.md" "$h/.claude-super/CLAUDE.md" || { echo "FAIL super CLAUDE.md not idempotent"; exit 1; }
 diff "$h/first-manifest.json" "$manifest"       || { echo "FAIL manifest not idempotent"; exit 1; }
+[ -d "$h/kb/projects" ] || { echo "FAIL kb vault not created"; exit 1; }
+[ -f "$h/kb/global/INDEX.md" ] || { echo "FAIL kb global index not created"; exit 1; }
+for p in vanilla super g; do
+  d="$h/.claude"; [ "$p" = vanilla ] || d="$h/.claude-$p"
+  python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+sys.exit(0 if d.get("env",{}).get("CLAUDE_CODE_REMOTE_MEMORY_DIR")==sys.argv[2] else 1)' \
+    "$d/settings.json" "$h/kb" || { echo "FAIL kb env missing in $p"; exit 1; }
+done
 # 2nd run must not re-install the plugin or re-add MCP (stateful fake reflects prior state, finding 7)
 grep -q "plugin install" "$CLAUDE_FAKE_LOG" && { echo "FAIL reinstalled plugin on 2nd run"; exit 1; }
 grep -q "mcp add-json"    "$CLAUDE_FAKE_LOG" && { echo "FAIL re-added MCP on 2nd run"; exit 1; }
@@ -103,15 +119,22 @@ printf 'CREDS' > "$h/.claude/.credentials.json"; printf 'HIST' > "$h/.claude/his
 mkdir -p "$h/.claude/projects/keepme"
 : > "$CLAUDE_FAKE_LOG"; : > "$PACLOG"
 # answers: confirm word, super y, dotnet y, codex_review y, codex_plugin n, playwright y,
-# azure n, ado n, gstack y, context7 y, context7 key (empty), linear n. Trailing blanks absorb
-# any dep prompt that a non-provisioned box might raise AFTER the config phase.
-printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\n\n\n\n' | \
+# azure n, ado n, gstack y, context7 y, context7 key (empty), linear n, kb y, vault path.
+# The order MUST track config_ensure_all; kb is asked last, so it sits last here too. Trailing
+# blanks absorb any dep prompt that a non-provisioned box might raise AFTER the config phase.
+printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\ny\n%s\n\n\n\n' "$h/kb" | \
   CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 CLAUDEFILES_CLEAN_SKIP_NET=1 bash "$cf/setup.sh"
 
 [ -e "$h/.claude/skills/ges-esp" ] && { echo "FAIL clean kept a stray skill"; exit 1; }
 [ -e "$h/.claude-super/skills/ges-esp" ] && { echo "FAIL clean skipped the super profile"; exit 1; }
 [ -e "$h/.claude-g/skills/ges-esp" ] && { echo "FAIL clean skipped the g profile"; exit 1; }
-[ -e "$h/.claude/rules" ] && { echo "FAIL clean kept rules/"; exit 1; }
+# rules/ comes back by design once kb is on (it owns kb.md + kb-index.md there); what must NOT
+# survive a clean is anything else, including the seeded context7.md above.
+[ -e "$h/.claude/rules/context7.md" ] && { echo "FAIL clean kept a foreign rule"; exit 1; }
+for f in "$h/.claude/rules"/*; do
+  [ -e "$f" ] || [ -L "$f" ] || continue
+  case "$(basename "$f")" in kb.md|kb-index.md) ;; *) echo "FAIL clean kept $f"; exit 1 ;; esac
+done
 [ -e "$h/.claude/settings.json.bak.20260101-000000" ] && { echo "FAIL clean kept a settings backup"; exit 1; }
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));assert "junkKey" not in d,d' "$h/.claude/settings.json" \
   || { echo "FAIL clean kept an unknown settings key"; exit 1; }

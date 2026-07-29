@@ -4,7 +4,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 # root ignores file modes, which would silently defeat the fail-closed and chmod assertions below
 [ "$(id -u)" -eq 0 ] && { echo "SKIP test-clean (running as root)"; exit 0; }
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
-for m in common config deps settings skills mcp claudemd plugins gstack profiles clean; do source "$cf/lib/$m.sh"; done
+for m in common config deps settings skills mcp claudemd plugins gstack kb profiles clean; do source "$cf/lib/$m.sh"; done
 export CLAUDEFILES_CONFIG_DIR="$h/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
 export CLAUDEFILES_CLEAN_SKIP_NET=1
 
@@ -222,6 +222,49 @@ printf '%s' "$out" | grep -qF 'settings.json keys' && { echo "FAIL settings-drif
 python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));d["junk"]=1;json.dump(d,open(p,"w"))' "$vd/settings.json"
 out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF 'settings.json keys' || { echo "FAIL settings-drift-not-reported"; exit 1; }
+
+# kb: env/permissions live in settings.json but not in the template. With a kb manifest that is
+# ownership, without one it is drift like any other key — and the exemption is entry-level, so an
+# entry the manifest does not record still gets reported.
+python3 - "$vd/settings.json" "$cf/claude/settings/settings.vanilla.template.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[2]))
+d["env"]={"CLAUDE_CODE_REMOTE_MEMORY_DIR":"/tmp/kb"}
+d["permissions"]={"allow":["Read(//tmp/kb/**)"]}
+json.dump(d, open(sys.argv[1],"w"), indent=2)
+PY
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'settings.json keys' || { echo "FAIL kb-keys-without-manifest-not-reported"; exit 1; }
+printf '%s' '{"env":["CLAUDE_CODE_REMOTE_MEMORY_DIR"],"env_prev":{},"permissions_allow":["Read(//tmp/kb/**)"]}' \
+  > "$(_kb_manifest vanilla)"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'settings.json keys' && { echo "FAIL kb-keys-reported-as-drift"; exit 1; }
+python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));d["env"]["SOMETHING_ELSE"]="1";json.dump(d,open(p,"w"),indent=2)' "$vd/settings.json"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'kb does not own' || { echo "FAIL unowned-entry-not-reported"; exit 1; }
+rm -f "$(_kb_manifest vanilla)"
+
+# kb: rules/ holding nothing but the two files kb owns is not drift; anything else is, and the file
+# name alone must not buy the exemption
+printf '%s' '{"env":["CLAUDE_CODE_REMOTE_MEMORY_DIR"],"env_prev":{},"permissions_allow":[]}' > "$(_kb_manifest vanilla)"
+mkdir -p "$vd/rules"
+printf '<!-- claudefiles-managed: kb -->\n' > "$vd/rules/kb.md"
+ln -sfn "$h/kb-vault/global/INDEX.md" "$vd/rules/kb-index.md"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" && { echo "FAIL kb-rules-reported-as-drift"; exit 1; }
+printf 'foreign\n' > "$vd/rules/other.md"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" || { echo "FAIL foreign-rule-not-reported"; exit 1; }
+rm -f "$vd/rules/other.md"
+printf 'hand written\n' > "$vd/rules/kb.md"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" || { echo "FAIL unmarked-kb-md-not-reported"; exit 1; }
+rm -rf "$vd/rules" "$(_kb_manifest vanilla)"
+
+# kb: the vault lives outside every profile dir, so the eraser must never reach it
+kbv="$h/kb-vault"; mkdir -p "$kbv/global"; printf 'precious\n' > "$kbv/global/note.md"
+CLAUDEFILES_TARGET="$vd" clean_profile vanilla >/dev/null 2>&1
+[ -f "$kbv/global/note.md" ] || { echo "FAIL clean wiped the vault"; exit 1; }
 
 # plugins: coverage of what the profile's own enabledPlugins declares. plugins_apply swallows
 # install errors, and after a clean the plugins/ dir is gone, so a silent loss must be visible here.

@@ -2,7 +2,7 @@
 # Install the full ~/.claude config on this machine. Idempotent; the update path too.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for m in common config deps settings skills plugins mcp claudemd gstack profiles clean; do source "$ROOT/lib/$m.sh"; done
+for m in common config deps settings skills plugins mcp claudemd gstack kb profiles clean; do source "$ROOT/lib/$m.sh"; done
 
 log "preflight"; require_cmd git; require_cmd python3
 command -v claude >/dev/null 2>&1 || warn "claude not on PATH yet (install it, then re-run)"
@@ -51,6 +51,11 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
     config_ensure_optional context7_api_key "Context7 API key (empty = free tier)" --secret
   fi
   config_ensure_flag linear        "Enable Linear MCP (issue tracker, one-time OAuth login)? (y/N)"
+  config_ensure_flag kb            "Enable the shared knowledge base (auto memory in an Obsidian vault)? (y/N)"
+  if [ "$(config_flag kb)" = true ]; then
+    config_ensure_optional kb.vault_path "Knowledge base vault path (empty = ~/Documents/Notes/kb)"
+    kb_vault_path >/dev/null    # fail fast: a bad stored path must not surface inside a recipe
+  fi
 }
 config_ensure_all
 
