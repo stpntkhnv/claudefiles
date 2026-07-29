@@ -234,9 +234,13 @@ clean_verify() {   # <name> <repo_root> — audit a cleaned profile. Always 0: C
     [ -f "$d/skills/gstack/$base/SKILL.md" ] && continue
     warn "clean-verify $name: stray skill '$base'"; issues=$((issues + 1))
   done
-  # 2. directories the repo never creates
+  # 2. directories the repo never creates. rules/ is the exception: kb owns two files there, so it
+  #    is drift only when it holds something else, or when kb is not installed in this profile.
   for p in rules agents commands output-styles; do
-    if [ -e "$d/$p" ]; then warn "clean-verify $name: '$p/' is back"; issues=$((issues + 1)); fi
+    if [ -e "$d/$p" ]; then
+      if [ "$p" = rules ] && [ -f "$(_kb_manifest "$name")" ] && _kb_rules_only "$d/rules"; then continue; fi
+      warn "clean-verify $name: '$p/' is back"; issues=$((issues + 1))
+    fi
   done
   # 3. live user-scope MCP set vs the manifest we just wrote
   local manifest; manifest="$(_mcp_manifest "$name")"

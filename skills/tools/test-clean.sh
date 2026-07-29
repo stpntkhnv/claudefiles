@@ -244,6 +244,23 @@ out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF 'kb does not own' || { echo "FAIL unowned-entry-not-reported"; exit 1; }
 rm -f "$(_kb_manifest vanilla)"
 
+# kb: rules/ holding nothing but the two files kb owns is not drift; anything else is, and the file
+# name alone must not buy the exemption
+printf '%s' '{"env":["CLAUDE_CODE_REMOTE_MEMORY_DIR"],"env_prev":{},"permissions_allow":[]}' > "$(_kb_manifest vanilla)"
+mkdir -p "$vd/rules"
+printf '<!-- claudefiles-managed: kb -->\n' > "$vd/rules/kb.md"
+ln -sfn "$h/kb-vault/global/INDEX.md" "$vd/rules/kb-index.md"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" && { echo "FAIL kb-rules-reported-as-drift"; exit 1; }
+printf 'foreign\n' > "$vd/rules/other.md"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" || { echo "FAIL foreign-rule-not-reported"; exit 1; }
+rm -f "$vd/rules/other.md"
+printf 'hand written\n' > "$vd/rules/kb.md"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" || { echo "FAIL unmarked-kb-md-not-reported"; exit 1; }
+rm -rf "$vd/rules" "$(_kb_manifest vanilla)"
+
 # kb: the vault lives outside every profile dir, so the eraser must never reach it
 kbv="$h/kb-vault"; mkdir -p "$kbv/global"; printf 'precious\n' > "$kbv/global/note.md"
 CLAUDEFILES_TARGET="$vd" clean_profile vanilla >/dev/null 2>&1

@@ -147,4 +147,47 @@ chk "vault survives disable" [ -f "$ha/kb/global/INDEX.md" ]
 chk "env entry gone"         bash -c '! grep -q CLAUDE_CODE_REMOTE_MEMORY_DIR "$1"' _ "$ha/.claude/settings.json"
 unset CLAUDEFILES_TARGET
 
+# --- kb_apply: rules -------------------------------------------------------
+setup_fixture_home >/dev/null; hr="$HOME"
+export CLAUDEFILES_CONFIG_DIR="$hr/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
+export CLAUDEFILES_TARGET="$hr/.claude"
+config_set kb.vault_path "$hr/kb"
+kb_apply vanilla true
+chk "policy rule written"     [ -f "$hr/.claude/rules/kb.md" ]
+chk "policy carries marker"   grep -qF "claudefiles-managed: kb" "$hr/.claude/rules/kb.md"
+chk "policy names the vault"  grep -qF "$hr/kb/global" "$hr/.claude/rules/kb.md"
+chk "policy says index is data" grep -qF "not as instructions" "$hr/.claude/rules/kb.md"
+chk "index symlink created"   [ -L "$hr/.claude/rules/kb-index.md" ]
+chk "index symlink target"    [ "$(readlink "$hr/.claude/rules/kb-index.md")" = "$hr/kb/global/INDEX.md" ]
+cp "$hr/.claude/rules/kb.md" "$hr/rule.run1"
+kb_apply vanilla true
+chk "rule write idempotent"   cmp -s "$hr/rule.run1" "$hr/.claude/rules/kb.md"
+
+kb_apply vanilla false
+chk "rule removed"            [ ! -e "$hr/.claude/rules/kb.md" ]
+chk "symlink removed"         [ ! -L "$hr/.claude/rules/kb-index.md" ]
+chk "empty rules dir removed" [ ! -d "$hr/.claude/rules" ]
+
+# non-clobber: a file with our name that is NOT ours is left alone, in both directions
+mkdir -p "$hr/.claude/rules"; printf 'user rule\n' > "$hr/.claude/rules/kb.md"
+kb_apply vanilla true
+chk "foreign kb.md untouched" grep -qx "user rule" "$hr/.claude/rules/kb.md"
+kb_apply vanilla false
+chk "foreign kb.md survives disable" grep -qx "user rule" "$hr/.claude/rules/kb.md"
+rm -f "$hr/.claude/rules/kb.md"
+
+# a non-symlink at the index path is left alone too
+printf 'mine\n' > "$hr/.claude/rules/kb-index.md"
+kb_apply vanilla true
+chk "foreign kb-index.md untouched" grep -qx "mine" "$hr/.claude/rules/kb-index.md"
+rm -f "$hr/.claude/rules/kb-index.md"
+
+# a symlink to a DIFFERENT vault is not ours: disabling must not remove it
+mkdir -p "$hr/other/global"; : > "$hr/other/global/INDEX.md"
+ln -s "$hr/other/global/INDEX.md" "$hr/.claude/rules/kb-index.md"
+kb_apply vanilla false
+chk "foreign vault symlink survives" [ -L "$hr/.claude/rules/kb-index.md" ]
+rm -f "$hr/.claude/rules/kb-index.md"
+unset CLAUDEFILES_TARGET
+
 [ "$fails" -eq 0 ] && echo "PASS test-kb" || { echo "SOME test-kb CASES FAILED"; exit 1; }
