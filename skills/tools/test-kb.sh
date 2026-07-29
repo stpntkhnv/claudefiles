@@ -120,4 +120,31 @@ s=json.load(open(sys.argv[1]))
 assert "env" not in s and "permissions" not in s, s
 PY
 
+# --- kb_apply: vault skeleton + settings ------------------------------------
+setup_fixture_home >/dev/null; ha="$HOME"
+export CLAUDEFILES_CONFIG_DIR="$ha/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
+export CLAUDEFILES_TARGET="$ha/.claude"
+config_set kb.vault_path "$ha/kb"
+kb_apply vanilla true
+chk "vault projects dir"     [ -d "$ha/kb/projects" ]
+chk "vault global index"     [ -f "$ha/kb/global/INDEX.md" ]
+chk "vault readme"           [ -f "$ha/kb/README.md" ]
+chk "settings env written"   bash -c 'python3 -c "import json,sys;d=json.load(open(sys.argv[1]));sys.exit(0 if d[\"env\"][\"CLAUDE_CODE_REMOTE_MEMORY_DIR\"]==sys.argv[2] else 1)" "$1" "$2"' _ "$ha/.claude/settings.json" "$ha/kb"
+
+# user content in the vault is never rewritten
+printf 'my index\n' > "$ha/kb/global/INDEX.md"
+kb_apply vanilla true
+chk "existing index preserved" grep -qx "my index" "$ha/kb/global/INDEX.md"
+
+# second run is byte-identical everywhere
+cp "$ha/.claude/settings.json" "$ha/settings.run1"
+kb_apply vanilla true
+chk "kb_apply idempotent"    cmp -s "$ha/settings.run1" "$ha/.claude/settings.json"
+
+# disable leaves the vault alone but cleans the profile
+kb_apply vanilla false
+chk "vault survives disable" [ -f "$ha/kb/global/INDEX.md" ]
+chk "env entry gone"         bash -c '! grep -q CLAUDE_CODE_REMOTE_MEMORY_DIR "$1"' _ "$ha/.claude/settings.json"
+unset CLAUDEFILES_TARGET
+
 [ "$fails" -eq 0 ] && echo "PASS test-kb" || { echo "SOME test-kb CASES FAILED"; exit 1; }
