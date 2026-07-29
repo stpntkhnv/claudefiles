@@ -6,7 +6,7 @@ profile_dir() { # <name>
 recipe_vanilla() { # <repo_root>  (caller exports CLAUDEFILES_TARGET + CLAUDE_CONFIG_DIR)
   local root="$1"
   settings_apply "$root/claude/settings/settings.vanilla.template.json" false false
-  skills_apply "$root" false false
+  skills_apply "$root" false false "$(config_flag kb)"
   claudemd_apply false               # drop codex nudge if migrating off super
   claudemd_personal_apply true
   kb_apply vanilla "$(config_flag kb)"
@@ -19,7 +19,7 @@ recipe_super() { # <repo_root>
   dotnet="$(config_flag dotnet_skills)"; cr="$(config_flag codex_review)"
   cpe=false; [ "$cr" = true ] && [ "$(config_flag codex_plugin)" = true ] && cpe=true
   settings_apply "$root/claude/settings/settings.super.template.json" "$dotnet" "$cpe"
-  skills_apply "$root" "$dotnet" "$cr"
+  skills_apply "$root" "$dotnet" "$cr" "$(config_flag kb)"
   claudemd_apply "$cr"
   claudemd_personal_apply false      # keep super's CLAUDE.md as before (personal block is vanilla-only)
   # consume the vision doc only when the profile that produces it is installed
@@ -42,7 +42,7 @@ recipe_super() { # <repo_root>
 recipe_g() { # <repo_root>  (caller exports CLAUDEFILES_TARGET + CLAUDE_CONFIG_DIR)
   local root="$1"
   settings_apply "$root/claude/settings/settings.g.template.json" false false
-  skills_apply "$root" false false
+  skills_apply "$root" false false "$(config_flag kb)"
   claudemd_apply false                 # no codex nudge in the vision profile
   claudemd_personal_apply true
   claudemd_vision_apply producer

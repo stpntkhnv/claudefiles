@@ -16,6 +16,12 @@ skills_apply "$cf" false true
 [ -f "$ht/.claude/skills/codex-review/SKILL.md" ] || { echo FAIL toggle-on; exit 1; }
 skills_apply "$cf" false false
 [ -e "$ht/.claude/skills/codex-review" ] && { echo FAIL toggle-off-not-removed; exit 1; }
+# kb-curate skill: copied only when the 4th arg (kb) is true, removed when it goes back to false
+setup_fixture_home >/dev/null; hk="$HOME"
+skills_apply "$cf" false false true
+[ -f "$hk/.claude/skills/kb-curate/SKILL.md" ] || { echo FAIL kb-curate-copy; exit 1; }
+skills_apply "$cf" false false false
+[ -e "$hk/.claude/skills/kb-curate" ] && { echo FAIL kb-curate-not-removed; exit 1; }
 # backward compat: 2-arg legacy call still copies context7
 setup_fixture_home >/dev/null; hc3="$HOME"
 skills_apply "$cf" false

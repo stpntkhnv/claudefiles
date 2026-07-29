@@ -1,6 +1,6 @@
 # skills.sh — install personal skills into ~/.claude/skills.
-skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_review:true|false>
-  local root="$1" dotnet="${2:-false}" codex_review="${3:-false}" dst="${CLAUDEFILES_TARGET:-$HOME/.claude}/skills"
+skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_review:true|false> <kb:true|false>
+  local root="$1" dotnet="${2:-false}" codex_review="${3:-false}" kb="${4:-false}" dst="${CLAUDEFILES_TARGET:-$HOME/.claude}/skills"
   mkdir -p "$dst"
   # context7-mcp: real dir (copy) — always
   mkdir -p "$dst/context7-mcp"
@@ -11,6 +11,13 @@ skills_apply() { # skills_apply <repo_root> <dotnet_enabled:true|false> <codex_r
     cp "$root/claude/skills/codex-review/SKILL.md" "$dst/codex-review/SKILL.md"
   else
     rm -rf "$dst/codex-review"
+  fi
+  # kb-curate: same shape as codex-review — copy by flag, remove when disabled
+  if [ "$kb" = true ]; then
+    mkdir -p "$dst/kb-curate"
+    cp "$root/claude/skills/kb-curate/SKILL.md" "$dst/kb-curate/SKILL.md"
+  else
+    rm -rf "$dst/kb-curate"
   fi
   if [ "$dotnet" != true ]; then
     rm -rf "$dst/dotnet-router"          # symmetric with codex-review: leave no trace on disable
