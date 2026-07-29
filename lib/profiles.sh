@@ -9,6 +9,7 @@ recipe_vanilla() { # <repo_root>  (caller exports CLAUDEFILES_TARGET + CLAUDE_CO
   skills_apply "$root" false false
   claudemd_apply false               # drop codex nudge if migrating off super
   claudemd_personal_apply true
+  kb_apply vanilla "$(config_flag kb)"
   local servers; servers="$(python3 "$root/claude/mcp/build_servers.py" "$(config_path)" vanilla)"
   mcp_apply "$servers" "$(_mcp_manifest vanilla)" "$(_mcp_legacy)"
 }
@@ -23,6 +24,7 @@ recipe_super() { # <repo_root>
   claudemd_personal_apply false      # keep super's CLAUDE.md as before (personal block is vanilla-only)
   # consume the vision doc only when the profile that produces it is installed
   if [ "$(config_flag profile_gstack)" = true ]; then claudemd_vision_apply consumer; else claudemd_vision_apply off; fi
+  kb_apply super "$(config_flag kb)"
   plugins_apply "$dotnet" "$cpe" || warn "super: plugins_apply reported an error (continuing to verify)"
   local servers; servers="$(python3 "$root/claude/mcp/build_servers.py" "$(config_path)")"
   mcp_apply "$servers" "$(_mcp_manifest super)"
@@ -44,6 +46,7 @@ recipe_g() { # <repo_root>  (caller exports CLAUDEFILES_TARGET + CLAUDE_CONFIG_D
   claudemd_apply false                 # no codex nudge in the vision profile
   claudemd_personal_apply true
   claudemd_vision_apply producer
+  kb_apply g "$(config_flag kb)"
   # gstack IS this profile: without it `g` is an empty shell, exactly like super without
   # superpowers (see the P1a check above). Fail the profile rather than report a hollow success.
   gstack_apply || { warn "g: gstack_apply failed — marking profile failed"; return 1; }

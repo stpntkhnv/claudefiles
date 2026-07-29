@@ -4,7 +4,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
 # gstack is in the list so the stub further down genuinely SHADOWS the real gstack_apply instead
 # of supplying a function that would otherwise not exist here.
-for m in common config settings skills mcp claudemd plugins gstack profiles; do source "$cf/lib/$m.sh"; done
+for m in common config settings skills mcp claudemd plugins gstack kb profiles; do source "$cf/lib/$m.sh"; done
 mkdir -p "$h/.config/claudefiles"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
 { "flags":{"context7":false,"playwright":false,"azure_mcp":false,"ado":false,"dotnet_skills":false,"codex_review":false,"codex_plugin":false},"context7_api_key":"" }

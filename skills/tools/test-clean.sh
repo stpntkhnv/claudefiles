@@ -4,7 +4,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 # root ignores file modes, which would silently defeat the fail-closed and chmod assertions below
 [ "$(id -u)" -eq 0 ] && { echo "SKIP test-clean (running as root)"; exit 0; }
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
-for m in common config deps settings skills mcp claudemd plugins gstack profiles clean; do source "$cf/lib/$m.sh"; done
+for m in common config deps settings skills mcp claudemd plugins gstack kb profiles clean; do source "$cf/lib/$m.sh"; done
 export CLAUDEFILES_CONFIG_DIR="$h/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
 export CLAUDEFILES_CLEAN_SKIP_NET=1
 
