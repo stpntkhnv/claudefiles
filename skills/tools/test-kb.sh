@@ -34,4 +34,90 @@ chk "empty falls back to default" [ "$(kb_vault_path)" = "$h/Documents/Notes/kb"
 chk "manifest path per profile" \
   [ "$(_kb_manifest super)" = "$CLAUDEFILES_CONFIG_DIR/managed-kb.super.json" ]
 
+# --- kb_settings.py --------------------------------------------------------
+setup_fixture_home >/dev/null; hs="$HOME"
+export CLAUDEFILES_CONFIG_DIR="$hs/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
+S="$hs/.claude/settings.json"; M="$(_kb_manifest vanilla)"
+V="$hs/Documents/Notes/kb"
+cat > "$S" <<'EOF'
+{ "theme": "auto",
+  "env": {"MY_OWN_VAR": "keep"},
+  "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(~/.ssh/**)"]} }
+EOF
+chk "helper runs" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "kb-settings-on" python3 - "$S" "$M" "$V" "$hs" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2])); v=sys.argv[3]
+assert s["env"]["CLAUDE_CODE_REMOTE_MEMORY_DIR"]==v, s["env"]
+assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost"
+assert s["theme"]=="auto", "unrelated key lost"
+p="~/Documents/Notes/kb/**"
+for e in (f"Read({p})", f"Edit({p})", f"Write({p})"):
+    assert e in s["permissions"]["allow"], (e, s["permissions"]["allow"])
+assert "Bash(ls:*)" in s["permissions"]["allow"], "user allow rule lost"
+assert s["permissions"]["deny"]==["Read(~/.ssh/**)"], "deny list touched"
+assert m["env"]==["CLAUDE_CODE_REMOTE_MEMORY_DIR"], m
+assert len(m["permissions_allow"])==3, m
+PY
+chk "settings write is idempotent" bash -c '
+  cp "$1" "$1.run1"; python3 "$2" "$1" "$3" "$4"; cmp -s "$1.run1" "$1"' _ "$S" "$cf/lib/py/kb_settings.py" "$M" "$V"
+
+# vault outside $HOME -> absolute // pattern
+chk "helper runs (outside home)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "/srv/kb"
+chk "kb-settings-outside-home" python3 - "$S" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert "Read(//srv/kb/**)" in s["permissions"]["allow"], s["permissions"]["allow"]
+assert not [e for e in s["permissions"]["allow"] if "Documents/Notes/kb" in e], "stale vault rules kept"
+PY
+
+# off: our entries go, the user's stay, the manifest is gone
+chk "helper runs (off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-off" python3 - "$S" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert "CLAUDE_CODE_REMOTE_MEMORY_DIR" not in s.get("env",{}), s.get("env")
+assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost on disable"
+assert s["permissions"]["allow"]==["Bash(ls:*)"], s["permissions"]["allow"]
+PY
+chk "manifest removed on disable" [ ! -e "$M" ]
+
+# no vault and no manifest: the file is not touched at all (not even reformatted)
+printf '%s' '{"theme":"auto","env":{"X":"1"}}' > "$S"
+cp "$S" "$S.untouched"
+chk "helper runs (no-op)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-noop-does-not-rewrite" cmp -s "$S.untouched" "$S"
+
+# a rule the USER wrote that happens to equal ours is never claimed and never removed
+cat > "$S" <<'EOF'
+{ "permissions": {"allow": ["Write(~/Documents/Notes/kb/**)"]} }
+EOF
+chk "helper runs (user rule on)"  python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "helper runs (user rule off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-user-rule-survives" python3 - "$S" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s["permissions"]["allow"]==["Write(~/Documents/Notes/kb/**)"], s["permissions"]["allow"]
+PY
+
+# an env value the USER set for the same key is restored on disable, not deleted
+printf '%s' '{"env":{"CLAUDE_CODE_REMOTE_MEMORY_DIR":"/user/own/store"}}' > "$S"
+chk "helper runs (user env on)"  python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "helper runs (user env off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-user-env-restored" python3 - "$S" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s["env"]["CLAUDE_CODE_REMOTE_MEMORY_DIR"]=="/user/own/store", s.get("env")
+PY
+
+# empty containers are pruned, not left as {}: a disabled feature leaves no trace
+printf '%s' '{"theme":"auto"}' > "$S"
+chk "helper runs (prune on)"  python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "helper runs (prune off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-pruned" python3 - "$S" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert "env" not in s and "permissions" not in s, s
+PY
+
 [ "$fails" -eq 0 ] && echo "PASS test-kb" || { echo "SOME test-kb CASES FAILED"; exit 1; }
