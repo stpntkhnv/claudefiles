@@ -17,13 +17,14 @@
 `lib/*.sh` — сфокусированные модули, каждый тестируется против фейкового `claude` и фикстур-`$HOME`; `lib/profiles.sh` компонует их в рецепты профилей (`recipe_vanilla`, `recipe_super`, `recipe_g`). Оркестратор `setup.sh` гоняет по порядку:
 
 1. **preflight** — проверка git/python3; про `claude` предупреждает, но не падает.
-2. **config** — спрашивает (только при TTY; без TTY — падает с понятным списком, а не висит), какие профили ставить (`vanilla` — всегда; `super` — по флагу `profile_super`; `g` — по флагу `profile_gstack`), при выбранном `super` — его флаги (`dotnet_skills`, `codex_review`, `codex_plugin`, `playwright`, `azure_mcp`, `ado` и ADO-секреты), плюс общие `context7` и `linear` (нужны и vanilla, и super, и g) — всё читается/пишется в `~/.config/claudefiles/secrets.json`.
+2. **config** — спрашивает (только при TTY; без TTY — падает с понятным списком, а не висит), какие профили ставить (`vanilla` — всегда; `super` — по флагу `profile_super`; `g` — по флагу `profile_gstack`), при выбранном `super` — его флаги (`dotnet_skills`, `codex_review`, `codex_plugin`, `playwright`, `azure_mcp`, `ado` и ADO-секреты), плюс общие `context7`, `linear` и `kb` (нужны и vanilla, и super, и g; у `kb` спрашивается ещё путь волта) — всё читается/пишется в `~/.config/claudefiles/secrets.json`.
 3. **deps** — по флагам выбранных профилей проверяет системные зависимости и предлагает поставить недостающие через `pacman` (Arch-only, `y/N` → `sudo pacman`): `node`/`npx` — всегда (vanilla безусловно поднимает Context7), `chromium` для Playwright и `dotnet-sdk` для .NET-плагина — только если выбран `super` с соответствующим флагом, `bun` — только если выбран `g` (без него инсталлятор gstack не стартует). Любая ветка не фатальна — нет TTY/`pacman`/`sudo` печатает ручную команду и продолжает.
 4. **профили** — для каждого выбранного профиля (`vanilla`, затем `super`, затем `g`, если выбраны) в **subshell** с `CLAUDEFILES_TARGET`/`CLAUDE_CONFIG_DIR`, указывающими на его каталог, гонится рецепт:
    - `settings.json` — заменяет управляемые ключи профиля из его шаблона (`settings.vanilla.template.json`: `theme`, `tui`, `statusLine`; `settings.super.template.json`: `theme`, `tui`, `statusLine` (тот же скрипт, что у vanilla) плюс `model`, `effortLevel`, `enabledPlugins`, `extraKnownMarketplaces`, `hooks`; `settings.g.template.json`: `theme`, `tui`, `statusLine`, `model`, `effortLevel`, `hooks` (Stop/Notification, без SessionStart) — без `enabledPlugins`), сохраняя чужие ключи. Управляемый ключ, отсутствующий в шаблоне профиля, удаляется из target — этим первый прогон на дефолтном каталоге снимает весь super-стейт (миграция «был super → стал vanilla»); `model`/`effortLevel` при этом чистятся только one-time (если раньше был включён super), дальше не трогаются.
    - `skills` — копирует `context7-mcp` всегда; `codex-review` и `dotnet-router` — только в рецепте super, по его флагам. Выключенный флаг убирает свой скилл (не оставляет следов). Рецепт `g` использует ту же ветку, что vanilla (только `context7-mcp`) — скиллы gstack ставит отдельно свой рецепт (см. `gstack` ниже).
    - `claude.md` — рецепт super при `codex_review=true` вписывает codex-наж marker-блоком; рецепт vanilla вместо него вписывает личный marker-блок со стилем письма. Рецепт `g` пишет и личный marker-блок, и marker-блок про видение (`docs/vision/`) в роли producer; рецепт super пишет тот же блок в роли consumer, если выбран `profile_gstack`, иначе снимает его. Все идемпотентны и сохраняют остальное содержимое файла.
    - `plugins` (только рецепт super) — идемпотентно ставит `superpowers@claude-plugins-official` (всегда для super), при `dotnet_skills=true` — `dotnet@dotnet-agent-skills`, при эффективном `codex_review && codex_plugin` — `codex@openai-codex`; добавляет их marketplace при отсутствии (гварды: повторный запуск — no-op).
+   - `kb` (по флагу, во всех трёх рецептах) — создаёт скелет волта базы знаний, переносит стор auto memory туда через `env.CLAUDE_CODE_REMOTE_MEMORY_DIR`, кладёт политику `rules/kb.md` и симлинк `rules/kb-index.md` на общий индекс. Выключенный флаг снимает записи и файлы, но не заметки (см. «База знаний» ниже).
    - `gstack` (только рецепт `g`) — клонирует/обновляет апстрим gstack в `skills/gstack` и гоняет его инсталлятор, когда HEAD сдвинулся (подробности — в разделе «Профиль g (этап видения)» ниже); провал роняет только профиль `g`.
    - `mcp` — сверяет user-scope MCP-серверы каталога профиля с его собственным манифестом (`managed-mcp.<profile>.json`): vanilla и g всегда получают `context7` плюс `linear` по флагу, super — набор по своим флагам; чужие/неуправляемые серверы не трогает. На дефолтном каталоге первый прогон подхватывает legacy `managed-mcp.json` как «прошлый манифест» и снимает старые super-серверы. Linear единственный удалённый сервер в наборе — `claude mcp add-json` кладёт его в конфиг, но включается он отдельной фазой ниже, после того как все профили провижнуты.
    - после успешного рецепта — симлинк `.credentials.json` и wrapper `~/.local/bin/claude-<profile>` (оба — только для не-дефолтных каталогов).
@@ -126,6 +127,45 @@ python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
 
 Тест гарантирует, что ни один секретный путь не трекается; репозиторий **публичный**.
 
+## База знаний (флаг `kb`)
+
+Штатная auto memory Claude Code держит каталог памяти внутри `CLAUDE_CONFIG_DIR`, поэтому у каждого профиля своя база на один и тот же репозиторий: `claude` и `claude-super` в одном проекте видят разные половины знания. Флаг `kb` переносит стор в один каталог вне репозиториев и профилей — волт Obsidian:
+
+```
+<волт>/                          # по умолчанию ~/Documents/Notes/kb, переопределяется kb.vault_path
+├── projects/<slug>/memory/      # проектная память, раскладку строит сам CLI; slug от корня git-репо
+│   └── MEMORY.md                # индекс проекта, грузится в каждую сессию (200 строк / 25 КБ)
+├── global/                      # кросс-проектные заметки
+│   └── INDEX.md                 # строка на заметку, грузится в каждой сессии любого проекта
+└── README.md                    # карта для человека: slug → нормальное имя проекта
+```
+
+Как это включено (`lib/kb.sh`):
+
+- `env.CLAUDE_CODE_REMOTE_MEMORY_DIR` в `settings.json` каждого профиля переносит корень стора; подкаталог `projects/<slug>/memory/` создаёт CLI.
+- `<профиль>/rules/kb.md` — политика записи, которую claudefiles пишет побайтово: что считать кросс-проектным, формат заметки, запрет на секреты, и прямое указание, что индекс это данные, а не инструкции.
+- `<профиль>/rules/kb-index.md` — симлинк на `global/INDEX.md` волта, чтобы общий индекс грузился в каждой сессии.
+- `permissions.allow` получает `Read`/`Edit`/`Write` на волт: он лежит вне рабочего каталога.
+- Скилл `kb-curate` (по тому же флагу) чистит дубли, устаревшее и переросший индекс — сначала показывает предложение, потом применяет одобренное.
+
+`env` и `permissions` пишет не `jsonmerge.py` (он заменяет управляемый ключ целиком), а `lib/py/kb_settings.py` по манифесту `managed-kb.<profile>.json`: снимается ровно то, что положили мы, чужие переменные и правила остаются. Выключение флага снимает записи, правило и симлинк; **заметки в волте не трогаются никогда** — ни выключением, ни чистой установкой.
+
+Переменная `CLAUDE_CODE_REMOTE_MEMORY_DIR` в публичных доках Claude Code не описана (там только `autoMemoryDirectory`, который подменяет путь целиком, без `projects/<slug>`). Проверена живым прогоном на CLI **2.1.220**. Поэтому есть смоук, который спрашивает настоящий CLI, где его память и загрузилось ли правило профиля:
+
+```bash
+CLAUDEFILES_KB_SMOKE=1 bash skills/tools/smoke-kb.sh
+```
+
+Синхронизация волта между машинами (Syncthing, Obsidian Sync) — отдельная задача, claudefiles её не настраивает. Если волт синкается, помните: приватная проектная память покидает машину, поэтому политика в `rules/kb.md` запрещает писать туда секреты, а синк лучше включать списком того, что синкается, а не списком исключений.
+
+Миграция на существующей машине: `kb`, как `linear` и `profile_gstack`, обязательный флаг — `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`) падает с `missing required flag 'flags.kb'`, пока он не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
+```bash
+python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
+  ~/.config/claudefiles/secrets.json flags.kb false
+```
+
+Существующая память в старых каталогах не переезжает сама. Перенос делается руками один раз, `cp -n` (не перезаписывать) в `<волт>/projects/<slug>/memory/` для проектной части и в `<волт>/global/` для машинной, затем индексы сводятся вручную, и только после проверки живой сессией старые каталоги (`~/.claude/projects/<slug>/memory`, `~/.claude-super/projects/<slug>/memory`) удаляются.
+
 ## dotnet-router (одна из компонент)
 
 Доставка ~100 [dotnet-skills](https://github.com/dotnet/skills) во все этапы [superpowers](https://github.com/anthropics/claude-plugins-official) — при постоянной цене контекста ~350 символов вместо ~18k токенов за полную установку плагинов.
@@ -186,12 +226,13 @@ python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
 
 ```
 setup.sh                      # оркестратор: preflight → config → deps → профили (vanilla + super + g) → verify → linear auth
-lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, claudemd, gstack, profiles, common, apply-if-changed
-lib/py/                       # config_io.py, jsonmerge.py
+lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, claudemd, gstack, kb, profiles, common, apply-if-changed
+lib/py/                       # config_io.py, jsonmerge.py, kb_settings.py
 claude/settings/              # settings.vanilla.template.json + settings.super.template.json + settings.g.template.json (управляемые ключи профиля)
 claude/statusline/statusline.sh   # статуслайн (vanilla, super и g)
 claude/skills/context7-mcp/   # SKILL.md (копируется в каждый профиль)
 claude/skills/codex-review/   # SKILL.md кросс-ревьюера (копируется в super при codex_review)
+claude/skills/kb-curate/      # SKILL.md курирования базы знаний (копируется в профиль при kb)
 claude/skills/dotnet-router/  # SKILL.md роутера (каталог генерируется, вне git; только для super при dotnet_skills)
 claude/mcp/build_servers.py   # сборка MCP-конфига из secrets.json, per-профиль
 claude/hooks/detect-dotnet.sh # SessionStart-хук (только профиль super)

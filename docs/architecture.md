@@ -24,6 +24,7 @@ flowchart TD
     mcp["mcp.sh"]
     claudemd["claudemd.sh"]
     gstack["gstack.sh"]
+    kb["kb.sh (+ kb_settings.py: записи settings)"]
   end
   subgraph cfg["Хранилище конфига"]
     config["config.sh"]
@@ -40,8 +41,10 @@ flowchart TD
   setup --> mcp
   prof --> settings & skills & plugins & mcp & claudemd
   prof --> gstack
+  prof --> kb
   prof --> cleanm
   settings --> jsonmerge
+  kb --> config
   prof --> config
   mcp --> config
   config --> configio
@@ -63,7 +66,13 @@ flowchart LR
   prof["profiles.sh"] --> wrap["~/.local/bin/claude-<name>"]
   prof --> creds[(".credentials.json симлинк")]
   gstack["gstack.sh"] --> gclone[("skills/gstack + .gstack-setup-head")]
+  kb["kb.sh"] --> vault[("волт: projects/, global/INDEX.md")]
+  kb --> rules[("rules/kb.md + rules/kb-index.md")]
+  kb -->|kb_settings.py| setjson
+  kb --> kbman[("managed-kb.<profile>.json")]
 ```
+
+`kb --> setjson` идёт мимо `settings.sh` намеренно: `jsonmerge.py` заменяет управляемый ключ целиком, а под `env` и `permissions` живут записи пользователя, поэтому kb владеет своими записями через манифест, как `mcp.sh` владеет серверами.
 
 ## Прогон setup.sh
 
@@ -92,7 +101,7 @@ sequenceDiagram
       P->>P: clean_profile (снос конфиг-поверхности, g без bun = отказ)
     end
     P->>R: recipe_vanilla / recipe_super / recipe_g
-    R->>M: settings, skills, claudemd, [plugins], [gstack], mcp
+    R->>M: settings, skills, claudemd, [kb], [plugins], [gstack], mcp
     M-->>R: settings.json, CLAUDE.md, managed-mcp
     Note over R: recipe_g падает, если упал gstack_apply
     alt рецепт упал
@@ -125,8 +134,9 @@ flowchart LR
     v2["skills_apply (f, f)"]
     v3["claudemd_apply false"]
     v4["claudemd_personal_apply true"]
+    v5["kb_apply vanilla (по флагу)"]
     v6["mcp_apply (+ legacy consume)"]
-    v1 --> v2 --> v3 --> v4 --> v6
+    v1 --> v2 --> v3 --> v4 --> v5 --> v6
   end
   subgraph S["recipe_super (~/.claude-super)"]
     direction TB
@@ -134,10 +144,11 @@ flowchart LR
     s2["skills_apply (dotnet, cr)"]
     s3["claudemd_apply cr"]
     s4["claudemd_personal_apply false"]
+    s45["kb_apply super (по флагу)"]
     s5["plugins_apply (dotnet, cpe)"]
     s6["mcp_apply"]
     s7["self-verify superpowers, только если claude на PATH -> fail if missing"]
-    s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
+    s1 --> s2 --> s3 --> s4 --> s45 --> s5 --> s6 --> s7
   end
   subgraph G["recipe_g (~/.claude-g)"]
     direction TB
@@ -146,9 +157,10 @@ flowchart LR
     g3["claudemd_apply false"]
     g4["claudemd_personal_apply true"]
     g5["claudemd_vision_apply producer"]
+    g55["kb_apply g (по флагу)"]
     g6["gstack_apply"]
     g7["mcp_apply"]
-    g1 --> g2 --> g3 --> g4 --> g5 --> g6 --> g7
+    g1 --> g2 --> g3 --> g4 --> g5 --> g55 --> g6 --> g7
   end
 ```
 
