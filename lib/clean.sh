@@ -251,11 +251,27 @@ sys.exit(0 if want==live else 1)' "$manifest" "$d/.claude.json" \
   # 4. top-level keys of settings.json vs the profile's template. After a clean the file is written
   #    from scratch, so anything extra means something re-added a key mid-run.
   local tmpl="$root/claude/settings/settings.$name.template.json"
+  local kbm; kbm="$(_kb_manifest "$name")"
   if [ -f "$tmpl" ] && [ -f "$d/settings.json" ]; then
+    # kb writes env/permissions ENTRY-wise (lib/py/kb_settings.py), so those two keys are legitimately
+    # absent from the template. Only a profile that has a kb manifest gets the exemption.
+    local kbkeys=""; [ -f "$kbm" ] && kbkeys="env permissions"
     python3 -c 'import json,sys
-t=set(json.load(open(sys.argv[1])));o=set(json.load(open(sys.argv[2])))
-sys.exit(0 if t==o else 1)' "$tmpl" "$d/settings.json" \
+t=set(json.load(open(sys.argv[1])));o=set(json.load(open(sys.argv[2])));ig=set(sys.argv[3].split())
+sys.exit(0 if (t-ig)==(o-ig) else 1)' "$tmpl" "$d/settings.json" "$kbkeys" \
       || { warn "clean-verify $name: settings.json keys differ from $(basename "$tmpl")"; issues=$((issues + 1)); }
+    # The exemption is not a blind spot: right after a clean those two keys may hold NOTHING except
+    # what the manifest records. Anything else under them is exactly the drift this check exists for.
+    if [ -f "$kbm" ]; then
+      python3 -c 'import json,sys
+s=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
+owned_env=set(m.get("env") or []) | set(m.get("env_prev") or {})
+owned_allow=set(m.get("permissions_allow") or [])
+sys.exit(0 if set(s.get("env") or {}) <= owned_env
+             and set((s.get("permissions") or {}).get("allow") or []) <= owned_allow else 1)' \
+        "$d/settings.json" "$kbm" \
+        || { warn "clean-verify $name: env/permissions hold entries kb does not own"; issues=$((issues + 1)); }
+    fi
   fi
   # 5. plugin COVERAGE (expected ⊆ installed), not equality: Claude Code auto-installs the official
   #    marketplace by itself, and reporting that as drift would train the user to ignore the report.

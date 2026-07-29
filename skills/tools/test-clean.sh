@@ -223,6 +223,32 @@ python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));d["junk"]=1;json.
 out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF 'settings.json keys' || { echo "FAIL settings-drift-not-reported"; exit 1; }
 
+# kb: env/permissions live in settings.json but not in the template. With a kb manifest that is
+# ownership, without one it is drift like any other key — and the exemption is entry-level, so an
+# entry the manifest does not record still gets reported.
+python3 - "$vd/settings.json" "$cf/claude/settings/settings.vanilla.template.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[2]))
+d["env"]={"CLAUDE_CODE_REMOTE_MEMORY_DIR":"/tmp/kb"}
+d["permissions"]={"allow":["Read(//tmp/kb/**)"]}
+json.dump(d, open(sys.argv[1],"w"), indent=2)
+PY
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'settings.json keys' || { echo "FAIL kb-keys-without-manifest-not-reported"; exit 1; }
+printf '%s' '{"env":["CLAUDE_CODE_REMOTE_MEMORY_DIR"],"env_prev":{},"permissions_allow":["Read(//tmp/kb/**)"]}' \
+  > "$(_kb_manifest vanilla)"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'settings.json keys' && { echo "FAIL kb-keys-reported-as-drift"; exit 1; }
+python3 -c 'import json,sys;p=sys.argv[1];d=json.load(open(p));d["env"]["SOMETHING_ELSE"]="1";json.dump(d,open(p,"w"),indent=2)' "$vd/settings.json"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF 'kb does not own' || { echo "FAIL unowned-entry-not-reported"; exit 1; }
+rm -f "$(_kb_manifest vanilla)"
+
+# kb: the vault lives outside every profile dir, so the eraser must never reach it
+kbv="$h/kb-vault"; mkdir -p "$kbv/global"; printf 'precious\n' > "$kbv/global/note.md"
+CLAUDEFILES_TARGET="$vd" clean_profile vanilla >/dev/null 2>&1
+[ -f "$kbv/global/note.md" ] || { echo "FAIL clean wiped the vault"; exit 1; }
+
 # plugins: coverage of what the profile's own enabledPlugins declares. plugins_apply swallows
 # install errors, and after a clean the plugins/ dir is gone, so a silent loss must be visible here.
 sd="$h/.claude-super"; mkdir -p "$sd/skills"
