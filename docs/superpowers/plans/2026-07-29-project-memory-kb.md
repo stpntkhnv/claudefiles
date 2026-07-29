@@ -166,7 +166,7 @@ git commit -m "feat(kb): резолвинг и валидация пути во�
 
 **Interfaces:**
 - Consumes: ничего из проекта; вызывается как `python3 kb_settings.py <settings.json> <manifest.json> [<vault>]`.
-- Produces: в `settings.json` ключ `env.CLAUDE_CODE_REMOTE_MEMORY_DIR` и три записи в `permissions.allow`; манифест `{"env": [...], "permissions_allow": [...]}` с тем, что положили именно мы. Пустой третий аргумент (или его отсутствие) означает выключение: снимаются ровно записи из манифеста, манифест удаляется.
+- Produces: в `settings.json` ключ `env.CLAUDE_CODE_REMOTE_MEMORY_DIR` и три записи в `permissions.allow`; манифест `{"env": [...], "env_prev": {...}, "permissions_allow": [...]}` с тем, что положили именно мы, плюс значение, которое было у ключа до нас. Пустой третий аргумент (или его отсутствие) означает выключение: снимаются ровно записи из манифеста, прежнее значение `env`-ключа восстанавливается, манифест удаляется. Выключение без манифеста вообще не трогает файл.
 
 - [ ] **Step 1: Написать падающий тест**
 
@@ -183,8 +183,8 @@ cat > "$S" <<'EOF'
   "env": {"MY_OWN_VAR": "keep"},
   "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(~/.ssh/**)"]} }
 EOF
-python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
-python3 - "$S" "$M" "$V" "$hs" <<'PY'
+chk "helper runs" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "kb-settings-on" python3 - "$S" "$M" "$V" "$hs" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2])); v=sys.argv[3]
 assert s["env"]["CLAUDE_CODE_REMOTE_MEMORY_DIR"]==v, s["env"]
@@ -203,49 +203,61 @@ chk "settings write is idempotent" bash -c '
   cp "$1" "$1.run1"; python3 "$2" "$1" "$3" "$4"; cmp -s "$1.run1" "$1"' _ "$S" "$cf/lib/py/kb_settings.py" "$M" "$V"
 
 # vault outside $HOME -> absolute // pattern
-python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "/srv/kb"
-python3 - "$S" <<'PY'
+chk "helper runs (outside home)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "/srv/kb"
+chk "kb-settings-outside-home" python3 - "$S" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))
 assert "Read(//srv/kb/**)" in s["permissions"]["allow"], s["permissions"]["allow"]
 assert not [e for e in s["permissions"]["allow"] if "Documents/Notes/kb" in e], "stale vault rules kept"
-print("ok kb-settings-outside-home")
 PY
 
 # off: our entries go, the user's stay, the manifest is gone
-python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
-python3 - "$S" <<'PY'
+chk "helper runs (off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-off" python3 - "$S" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))
 assert "CLAUDE_CODE_REMOTE_MEMORY_DIR" not in s.get("env",{}), s.get("env")
 assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost on disable"
 assert s["permissions"]["allow"]==["Bash(ls:*)"], s["permissions"]["allow"]
-print("ok kb-settings-off")
 PY
 chk "manifest removed on disable" [ ! -e "$M" ]
+
+# no vault and no manifest: the file is not touched at all (not even reformatted)
+printf '%s' '{"theme":"auto","env":{"X":"1"}}' > "$S"
+cp "$S" "$S.untouched"
+chk "helper runs (no-op)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-noop-does-not-rewrite" cmp -s "$S.untouched" "$S"
 
 # a rule the USER wrote that happens to equal ours is never claimed and never removed
 cat > "$S" <<'EOF'
 { "permissions": {"allow": ["Write(~/Documents/Notes/kb/**)"]} }
 EOF
-python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
-python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
-python3 - "$S" <<'PY'
+chk "helper runs (user rule on)"  python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "helper runs (user rule off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-user-rule-survives" python3 - "$S" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))
 assert s["permissions"]["allow"]==["Write(~/Documents/Notes/kb/**)"], s["permissions"]["allow"]
-print("ok kb-settings-user-rule-survives")
 PY
 
-# empty containers are pruned, not left as {} — a disabled feature leaves no trace
+# an env value the USER set for the same key is restored on disable, not deleted
+printf '%s' '{"env":{"CLAUDE_CODE_REMOTE_MEMORY_DIR":"/user/own/store"}}' > "$S"
+chk "helper runs (user env on)"  python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "helper runs (user env off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-user-env-restored" python3 - "$S" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s["env"]["CLAUDE_CODE_REMOTE_MEMORY_DIR"]=="/user/own/store", s.get("env")
+PY
+
+# empty containers are pruned, not left as {}: a disabled feature leaves no trace
 printf '%s' '{"theme":"auto"}' > "$S"
-python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
-python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
-python3 - "$S" <<'PY'
+chk "helper runs (prune on)"  python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "helper runs (prune off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chk "kb-settings-pruned" python3 - "$S" <<'PY'
 import json,sys
 s=json.load(open(sys.argv[1]))
 assert "env" not in s and "permissions" not in s, s
-print("ok kb-settings-pruned")
 PY
 ```
 
@@ -291,20 +303,29 @@ def pattern(vault):
 settings_path, manifest_path = sys.argv[1], sys.argv[2]
 vault = (sys.argv[3].rstrip("/") if len(sys.argv) > 3 else "")
 
-s = load(settings_path, {})
 prev = load(manifest_path, {})
+if not vault and not prev:
+    # Off and nothing of ours on record: touching settings.json would only reformat a file we have
+    # no business rewriting. Every profile runs this path on every setup with the feature disabled.
+    sys.exit(0)
+
+s = load(settings_path, {})
 prev_env = list(prev.get("env") or [])
+prev_env_values = dict(prev.get("env_prev") or {})
 prev_allow = list(prev.get("permissions_allow") or [])
 
 env = dict(s.get("env") or {})
 for k in prev_env:
-    env.pop(k, None)
+    # A value the user had set for the same key before we took it over is put back, not dropped.
+    if k in prev_env_values: env[k] = prev_env_values[k]
+    else:                    env.pop(k, None)
 perms = dict(s.get("permissions") or {})
 allow = [e for e in (perms.get("allow") or []) if e not in prev_allow]
 
-new_env, new_allow = [], []
+new_env, new_allow, saved_env = [], [], {}
 if vault:
     if ENV_KEY in env and env[ENV_KEY] != vault:
+        saved_env[ENV_KEY] = env[ENV_KEY]
         sys.stderr.write(f"kb: replacing an existing {ENV_KEY}={env[ENV_KEY]!r}\n")
     env[ENV_KEY] = vault
     new_env = [ENV_KEY]
@@ -336,7 +357,7 @@ if new_env or new_allow:
     os.makedirs(os.path.dirname(manifest_path) or ".", exist_ok=True)
     fd = os.open(manifest_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        json.dump({"env": new_env, "permissions_allow": new_allow}, f, indent=2)
+        json.dump({"env": new_env, "env_prev": saved_env, "permissions_allow": new_allow}, f, indent=2)
 else:
     try:
         os.unlink(manifest_path)
@@ -479,19 +500,25 @@ git commit -m "feat(kb): kb_apply — скелет волта и перенос 
 **Files:**
 - Modify: `setup.sh:5` (список модулей), `setup.sh:48-54` (вопросы)
 - Modify: `lib/profiles.sh:6-14`, `lib/profiles.sh:16-38`, `lib/profiles.sh:40-52`
-- Modify: `skills/tools/test-setup-idempotent.sh:44-47` (фикстурный `secrets.json`)
-- Modify: `skills/tools/test-multiprofile.sh` (тот же фикстурный `secrets.json`)
+- Modify: `skills/tools/test-setup-idempotent.sh:44-47` (фикстурный `secrets.json`), `:99-107` (поток ответов чистой установки), `:112` (проверка `rules/`)
+- Modify: `skills/tools/test-multiprofile.sh:17-20` (фикстурный `secrets.json`)
+- Modify: `skills/tools/test-profiles.sh:7` (список модулей)
+- Modify: `skills/tools/test-clean.sh:5` (список модулей)
 
 **Interfaces:**
 - Consumes: `kb_apply` (задача 3), `config_flag` (`lib/config.sh:20`), `config_ensure_flag`/`config_ensure_optional` (`lib/config.sh:34,46`).
 - Produces: `flags.kb` и `kb.vault_path` в `secrets.json`; `kb_apply <profile> <flag>` в каждом рецепте.
 
-- [ ] **Step 1: Найти все фикстуры, которые сеют флаги**
+Затронуты ровно четыре теста, список получен не эвристикой, а тремя срезами: кто запускает `setup.sh` (`test-setup-idempotent.sh`, `test-multiprofile.sh`), кто подключает `lib/profiles.sh` и потому исполняет рецепты (`test-clean.sh`, `test-multiprofile.sh`), кто зовёт рецепты напрямую (`test-profiles.sh`). `test-gstack.sh` упоминает `setup.sh` только в комментариях и не затронут.
 
-Run: `grep -rln "profile_gstack" skills/tools/`
-Expected: список тестов со своим `secrets.json`; в каждом из них флаг `kb` придётся добавить, иначе `config_ensure_flag` под `CLAUDEFILES_ASSUME_TTY=0` сделает `die`.
+- [ ] **Step 1: Подключить модуль в тестах, которые исполняют рецепты**
 
-- [ ] **Step 2: Добавить флаг в фикстуры и убедиться, что сквозной тест падает**
+`skills/tools/test-profiles.sh:7` и `skills/tools/test-clean.sh:5` — добавить `kb` перед `profiles` в список `source`. Без этого рецепт упадёт на `kb_apply: command not found`, а не на отсутствующей фиче.
+
+Run: `bash skills/tools/test-profiles.sh && bash skills/tools/test-clean.sh`
+Expected: PASS обоих (модуль подключён, флага в их фикстурах нет, значит `kb_apply` получает `false` и не делает ничего).
+
+- [ ] **Step 2: Добавить проверки и фикстуры, убедиться, что сквозной тест падает**
 
 В `skills/tools/test-setup-idempotent.sh` заменить строку флагов на:
 
@@ -511,10 +538,24 @@ json.dump(d, open(p,"w"), indent=2)
 PY
 ```
 
-То же самое сделать в остальных найденных на шаге 1 фикстурах.
+То же самое (только флаг `"kb":true` и патч пути) сделать в `skills/tools/test-multiprofile.sh:17-20`.
+
+Там же, в `test-setup-idempotent.sh`, дописать проверки после существующих `diff`-строк первого и второго прогона:
+
+```bash
+[ -d "$h/kb/projects" ] || { echo "FAIL kb vault not created"; exit 1; }
+[ -f "$h/kb/global/INDEX.md" ] || { echo "FAIL kb global index not created"; exit 1; }
+for p in vanilla super g; do
+  d="$h/.claude"; [ "$p" = vanilla ] || d="$h/.claude-$p"
+  python3 -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+sys.exit(0 if d.get("env",{}).get("CLAUDE_CODE_REMOTE_MEMORY_DIR")==sys.argv[2] else 1)' \
+    "$d/settings.json" "$h/kb" || { echo "FAIL kb env missing in $p"; exit 1; }
+done
+```
 
 Run: `bash skills/tools/test-setup-idempotent.sh`
-Expected: FAIL — прогон падает на `missing required flag 'flags.kb'`, потому что `setup.sh` ещё не задаёт вопрос и не подключает модуль.
+Expected: FAIL `kb vault not created` — флаг в фикстуре есть, но `setup.sh` про модуль ещё не знает, поэтому волт никто не создаёт.
 
 - [ ] **Step 3: Подключить модуль и задать вопросы**
 
@@ -552,28 +593,34 @@ for m in common config deps settings skills plugins mcp claudemd gstack kb profi
   kb_apply g "$(config_flag kb)"
 ```
 
-- [ ] **Step 4: Прогнать сквозные тесты**
+- [ ] **Step 4: Починить интерактивный прогон чистой установки в том же тесте**
 
-Run: `bash skills/tools/test-setup-idempotent.sh && bash skills/tools/test-multiprofile.sh`
-Expected: PASS обоих; второй прогон `setup.sh` не даёт diff ни в одном `settings.json`.
-
-- [ ] **Step 5: Дописать проверку волта в сквозной тест**
-
-В `skills/tools/test-setup-idempotent.sh` после существующих `diff`-проверок:
+Чистая установка стирает `secrets.json`, поэтому её прогон отвечает на все вопросы потоком строк (`test-setup-idempotent.sh:99-107`). Два новых вопроса задаются последними, после `linear`, и поток должен их закрыть. Заменить строку запуска на:
 
 ```bash
-[ -d "$h/kb/projects" ] || { echo "FAIL kb vault not created"; exit 1; }
-for p in vanilla super g; do
-  d="$h/.claude"; [ "$p" = vanilla ] || d="$h/.claude-$p"
-  python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))
-sys.exit(0 if d.get("env",{}).get("CLAUDE_CODE_REMOTE_MEMORY_DIR")==sys.argv[2] else 1)' \
-    "$d/settings.json" "$h/kb" || { echo "FAIL kb env missing in $p"; exit 1; }
+# answers: confirm word, super y, dotnet y, codex_review y, codex_plugin n, playwright y,
+# azure n, ado n, gstack y, context7 y, context7 key (empty), linear n, kb y, vault path.
+# Trailing blanks absorb any dep prompt that a non-provisioned box might raise AFTER the config phase.
+printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\ny\n%s\n\n\n\n' "$h/kb" | \
+  CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 CLAUDEFILES_CLEAN_SKIP_NET=1 bash "$cf/setup.sh"
+```
+
+Порядок ответов обязан совпадать с порядком вопросов в `config_ensure_all`: kb спрашивается последним, поэтому и в потоке он последний перед хвостовыми пустыми строками.
+
+Там же (`test-setup-idempotent.sh:112`) проверка `[ -e "$h/.claude/rules" ] && FAIL clean kept rules/` перестаёт быть верной: с включённым kb рецепт заново создаёт `rules/` со своими двумя файлами. Заменить на проверку, что в каталоге нет ничего чужого:
+
+```bash
+[ -e "$h/.claude/rules/context7.md" ] && { echo "FAIL clean kept a foreign rule"; exit 1; }
+for f in "$h/.claude/rules"/*; do
+  [ -e "$f" ] || continue
+  case "$(basename "$f")" in kb.md|kb-index.md) ;; *) echo "FAIL clean kept $f"; exit 1 ;; esac
 done
 ```
 
-Run: `bash skills/tools/test-setup-idempotent.sh`
-Expected: PASS.
+- [ ] **Step 5: Прогнать сквозные тесты**
+
+Run: `bash skills/tools/test-setup-idempotent.sh && bash skills/tools/test-multiprofile.sh`
+Expected: PASS обоих; второй прогон `setup.sh` не даёт diff ни в одном `settings.json`, чистая установка перестраивает конфиг байт-в-байт.
 
 - [ ] **Step 6: Коммит**
 
@@ -633,15 +680,28 @@ Expected: FAIL `kb keys reported as drift` (проверка 4 сравнива�
 
 ```bash
   local tmpl="$root/claude/settings/settings.$name.template.json"
+  local kbm; kbm="$(_kb_manifest "$name")"
   if [ -f "$tmpl" ] && [ -f "$d/settings.json" ]; then
     local kbkeys=""
     # kb writes env/permissions ENTRY-wise (lib/py/kb_settings.py), so those two keys are legitimately
     # absent from the template. Only the profile that has a kb manifest gets the exemption.
-    [ -f "$(_kb_manifest "$name")" ] && kbkeys="env permissions"
+    [ -f "$kbm" ] && kbkeys="env permissions"
     python3 -c 'import json,sys
 t=set(json.load(open(sys.argv[1])));o=set(json.load(open(sys.argv[2])));ig=set(sys.argv[3].split())
 sys.exit(0 if (t-ig)==(o-ig) else 1)' "$tmpl" "$d/settings.json" "$kbkeys" \
       || { warn "clean-verify $name: settings.json keys differ from $(basename "$tmpl")"; issues=$((issues + 1)); }
+    # The exemption is not a blind spot: right after a clean, those two keys may hold NOTHING except
+    # what the kb manifest records. Anything else under them is exactly the drift the check exists for.
+    if [ -f "$kbm" ]; then
+      python3 -c 'import json,sys
+s=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
+owned_env=set(m.get("env") or []) | set(m.get("env_prev") or {})
+owned_allow=set(m.get("permissions_allow") or [])
+sys.exit(0 if set(s.get("env") or {}) <= owned_env
+             and set((s.get("permissions") or {}).get("allow") or []) <= owned_allow else 1)' \
+        "$d/settings.json" "$kbm" \
+        || { warn "clean-verify $name: env/permissions hold entries kb does not own"; issues=$((issues + 1)); }
+    fi
   fi
 ```
 
@@ -709,6 +769,14 @@ rm -f "$hr/.claude/rules/kb.md"
 printf 'mine\n' > "$hr/.claude/rules/kb-index.md"
 kb_apply vanilla true
 chk "foreign kb-index.md untouched" grep -qx "mine" "$hr/.claude/rules/kb-index.md"
+rm -f "$hr/.claude/rules/kb-index.md"
+
+# a symlink to a DIFFERENT vault is not ours: disabling must not remove it
+mkdir -p "$hr/other/global"; : > "$hr/other/global/INDEX.md"
+ln -s "$hr/other/global/INDEX.md" "$hr/.claude/rules/kb-index.md"
+kb_apply vanilla false
+chk "foreign vault symlink survives" [ -L "$hr/.claude/rules/kb-index.md" ]
+rm -f "$hr/.claude/rules/kb-index.md"
 unset CLAUDEFILES_TARGET
 ```
 
@@ -725,6 +793,11 @@ printf '%s' "$out" | grep -qF "'rules/' is back" && { echo "FAIL kb rules report
 printf 'foreign\n' > "$vd2/rules/other.md"
 out="$(clean_verify vanilla "$cf" 2>&1)"
 printf '%s' "$out" | grep -qF "'rules/' is back" || { echo "FAIL foreign rule not reported"; exit 1; }
+rm -f "$vd2/rules/other.md"
+# a kb.md WITHOUT our marker is drift too: the file name alone must not buy the exemption
+printf 'hand written\n' > "$vd2/rules/kb.md"
+out="$(clean_verify vanilla "$cf" 2>&1)"
+printf '%s' "$out" | grep -qF "'rules/' is back" || { echo "FAIL unmarked kb.md not reported"; exit 1; }
 rm -rf "$vd2/rules" "$(_kb_manifest vanilla)"
 ```
 
@@ -783,14 +856,15 @@ _kb_link_index() { # <link> <target>
   return 0
 }
 
-_kb_remove_rules() { # <rules_dir>
-  local rules="$1"
+_kb_remove_rules() { # <rules_dir> <index_target|"">
+  local rules="$1" idx="$2"
   if [ -e "$rules/kb.md" ] && grep -qF "$_KB_RULE_MARKER" "$rules/kb.md" 2>/dev/null; then
     rm -f "$rules/kb.md"
   fi
-  # Only OUR symlink goes: one that points at some other index is the user's business.
-  if [ -L "$rules/kb-index.md" ]; then
-    case "$(readlink "$rules/kb-index.md")" in */global/INDEX.md) rm -f "$rules/kb-index.md" ;; esac
+  # Only the symlink pointing at THIS vault's index goes. A same-named link to another vault is the
+  # user's, and an unresolvable vault path (empty second argument) means we cannot tell — leave it.
+  if [ -n "$idx" ] && [ -L "$rules/kb-index.md" ] && [ "$(readlink "$rules/kb-index.md")" = "$idx" ]; then
+    rm -f "$rules/kb-index.md"
   fi
   rmdir "$rules" 2>/dev/null || true
   return 0
@@ -806,7 +880,11 @@ _kb_remove_rules() { # <rules_dir>
     _kb_write_rule "$rules/kb.md" "$vault"
     _kb_link_index "$rules/kb-index.md" "$vault/global/INDEX.md"
   else
-    _kb_remove_rules "$rules"
+    # Disabling must not die on a broken kb.vault_path: resolve it in a subshell and, if it fails,
+    # pass an empty target so the symlink is left alone instead of removed on a guess.
+    local idx=""
+    idx="$( (kb_vault_path) 2>/dev/null )" && idx="$idx/global/INDEX.md" || idx=""
+    _kb_remove_rules "$rules" "$idx"
   fi
 ```
 
@@ -828,12 +906,18 @@ _kb_remove_rules() { # <rules_dir>
 И в `lib/kb.sh`:
 
 ```bash
-_kb_rules_only() { # <rules_dir> — 0 if it holds nothing but the two files kb owns
+_kb_rules_only() { # <rules_dir> — 0 if it holds nothing but the two files kb owns, ours by evidence
   local rules="$1" e base
   for e in "$rules"/* "$rules"/.[!.]*; do
     [ -e "$e" ] || [ -L "$e" ] || continue
     base="$(basename "$e")"
-    case "$base" in kb.md|kb-index.md) ;; *) return 1 ;; esac
+    case "$base" in
+      # The name alone proves nothing: a hand-written kb.md or a real file at kb-index.md is drift
+      # like any other, and hiding it behind the exemption is exactly what clean-verify must not do.
+      kb.md)       grep -qF "$_KB_RULE_MARKER" "$e" 2>/dev/null || return 1 ;;
+      kb-index.md) [ -L "$e" ] || return 1 ;;
+      *)           return 1 ;;
+    esac
   done
   return 0
 }
@@ -901,6 +985,11 @@ The base is two areas of one vault. The path is in the `kb` rule of this profile
 
 Curate ONE area per run, the one the user asked about. Never both silently.
 
+The vault is the user's, and every change here is a deletion or a rewrite of something they may
+never have read. So this skill runs in two passes: first REPORT what you would change and why, then
+apply only what the user approves. Never delete or rewrite a note before that approval, and never
+widen the run to notes the user did not ask about.
+
 ## Steps
 
 1. Read the index of the area (`MEMORY.md` for a project, `global/INDEX.md` for the shared area)
@@ -918,8 +1007,9 @@ Curate ONE area per run, the one the user asked about. Never both silently.
 6. **Index format.** Every line is exactly `- [[name]]: what the note is about`. Lines that carry
    instructions, multi-line blocks, or entries for notes that no longer exist are rewritten or
    dropped. `global/INDEX.md` stays under 50 lines, `MEMORY.md` under 200 lines and 25 KB.
-7. Report a diff-shaped summary: what was merged, what was deleted, what was rewritten. Do not
-   present it as done until the files on disk match the report.
+7. Present the whole set as a proposal: for each note, what would be merged, deleted or rewritten,
+   and on what evidence. Wait for the user. Then apply exactly what they approved and report a
+   diff-shaped summary. Do not present it as done until the files on disk match the report.
 ```
 
 - [ ] **Step 4: Провести флаг через skills_apply и рецепты**
