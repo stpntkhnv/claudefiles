@@ -28,6 +28,9 @@ chk "relative path dies"       dies kb_vault_path
 config_set kb.vault_path "/srv/../etc/kb"
 chk "dot-dot dies"             dies kb_vault_path
 
+config_set kb.vault_path "/"
+chk "filesystem root dies"     dies kb_vault_path
+
 config_set kb.vault_path ""
 chk "empty falls back to default" [ "$(kb_vault_path)" = "$h/Documents/Notes/kb" ]
 
@@ -81,6 +84,20 @@ assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost on disable"
 assert s["permissions"]["allow"]==["Bash(ls:*)"], s["permissions"]["allow"]
 PY
 chk "manifest removed on disable" [ ! -e "$M" ]
+
+# a manifest that already existed with a loose mode is tightened, not left as it was
+printf '%s' '{}' > "$M"; chmod 644 "$M"
+chk "helper runs (mode)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "manifest is 600"    [ "$(stat -c '%a' "$M")" = "600" ]
+chk "helper runs (mode off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+
+# the settings write leaves no temp file behind and keeps the file's own mode
+chmod 640 "$S"
+chk "helper runs (mode keep)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "settings mode preserved" [ "$(stat -c '%a' "$S")" = "640" ]
+chk "no temp left behind" bash -c '! ls "$(dirname "$1")"/.kb-settings-* >/dev/null 2>&1' _ "$S"
+chk "helper runs (mode keep off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
+chmod 644 "$S"
 
 # no vault and no manifest: the file is not touched at all (not even reformatted)
 printf '%s' '{"theme":"auto","env":{"X":"1"}}' > "$S"
@@ -187,6 +204,20 @@ mkdir -p "$hr/other/global"; : > "$hr/other/global/INDEX.md"
 ln -s "$hr/other/global/INDEX.md" "$hr/.claude/rules/kb-index.md"
 kb_apply vanilla false
 chk "foreign vault symlink survives" [ -L "$hr/.claude/rules/kb-index.md" ]
+
+# ...and enabling retargets it, because a link to some vault's index is ours after a path change
+kb_apply vanilla true
+chk "stale vault symlink retargeted" \
+  [ "$(readlink "$hr/.claude/rules/kb-index.md")" = "$hr/kb/global/INDEX.md" ]
+
+# a symlink pointing at something that is NOT an index is left alone in both directions
+kb_apply vanilla false
+printf 'notes\n' > "$hr/other/notes.md"
+mkdir -p "$hr/.claude/rules"; ln -sfn "$hr/other/notes.md" "$hr/.claude/rules/kb-index.md"
+kb_apply vanilla true
+chk "non-index symlink untouched" \
+  [ "$(readlink "$hr/.claude/rules/kb-index.md")" = "$hr/other/notes.md" ]
+kb_apply vanilla false
 rm -f "$hr/.claude/rules/kb-index.md"
 unset CLAUDEFILES_TARGET
 

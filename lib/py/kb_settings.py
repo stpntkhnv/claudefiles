@@ -6,7 +6,7 @@ Usage: kb_settings.py <settings.json> <manifest.json> [<vault_abs_path>]
 An empty or absent vault means the feature is off: exactly what the manifest records is removed and
 the manifest is deleted. jsonmerge.py cannot do this — it replaces a managed key wholesale, which
 would drop the user's own env vars and permission rules living under the same two keys."""
-import json, os, sys
+import json, os, sys, tempfile
 
 ENV_KEY = "CLAUDE_CODE_REMOTE_MEMORY_DIR"
 
@@ -75,16 +75,28 @@ if perms: s["permissions"] = perms
 else:     s.pop("permissions", None)
 
 os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
-tmp = settings_path + ".kbtmp"
-with open(tmp, "w") as f:
-    json.dump(s, f, indent=2)
-os.replace(tmp, settings_path)
+# A fixed sibling name (settings.json.kbtmp) is a path we would silently overwrite; mkstemp in the
+# same directory keeps the write atomic without claiming a name that may not be ours.
+try:
+    mode = os.stat(settings_path).st_mode & 0o777   # keep the file's own mode; mkstemp gives 0600
+except FileNotFoundError:
+    mode = 0o644
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings_path) or ".", prefix=".kb-settings-")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(s, f, indent=2)
+    os.chmod(tmp, mode)
+    os.replace(tmp, settings_path)
+except Exception:
+    os.unlink(tmp)
+    raise
 
 if new_env or new_allow:
     os.makedirs(os.path.dirname(manifest_path) or ".", exist_ok=True)
     fd = os.open(manifest_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump({"env": new_env, "env_prev": saved_env, "permissions_allow": new_allow}, f, indent=2)
+    os.chmod(manifest_path, 0o600)   # the mode above only applies on create, as in config_io.py:44
 else:
     try:
         os.unlink(manifest_path)

@@ -23,6 +23,9 @@ kb_vault_path() {
   case "$raw/" in
     */../*) die "kb.vault_path must not contain '..' (got '$raw')" ;;
   esac
+  # '/' would strip to the empty string below, and an empty vault means "feature off" to the
+  # settings helper while the shell side still built /projects and /global. Refuse it outright.
+  [ "$raw" = / ] && die "kb.vault_path must not be the filesystem root"
   printf '%s\n' "${raw%/}"
 }
 
@@ -69,18 +72,27 @@ EOF
 }
 
 _kb_write_rule() { # <path> <vault>
-  local path="$1" vault="$2" tmp="$1.kbtmp"
+  local path="$1" vault="$2" tmp
   if [ -e "$path" ] && ! grep -qF "$_KB_RULE_MARKER" "$path" 2>/dev/null; then
     warn "kb: $path exists and is not claudefiles-managed — leaving it untouched"; return 0
   fi
+  # mktemp, not "$path.kbtmp": a fixed sibling name is itself a path we would silently overwrite.
+  tmp="$(mktemp "$(dirname "$path")/.kb.XXXXXX")" || { warn "kb: cannot write $path"; return 0; }
   _kb_rule_text "$vault" > "$tmp" && mv -f "$tmp" "$path" || { rm -f "$tmp"; warn "kb: cannot write $path"; }
   return 0
 }
 
 _kb_link_index() { # <link> <target>
-  local link="$1" tgt="$2"
+  local link="$1" tgt="$2" cur
   if [ -L "$link" ]; then
-    [ "$(readlink "$link")" = "$tgt" ] || ln -sfn "$tgt" "$link"
+    cur="$(readlink "$link")"
+    [ "$cur" = "$tgt" ] && return 0
+    # Retarget only what looks like a kb index, i.e. our own link after kb.vault_path changed.
+    # A link the user pointed at something else lives in our namespace but is still theirs.
+    case "$cur" in
+      */global/INDEX.md) ln -sfn "$tgt" "$link" ;;
+      *) warn "kb: $link points at $cur, which is not a knowledge-base index — leaving it untouched" ;;
+    esac
     return 0
   fi
   if [ -e "$link" ]; then
