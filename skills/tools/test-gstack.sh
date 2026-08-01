@@ -8,6 +8,10 @@ chk() { local d="$1"; shift; if "$@"; then printf 'ok   %s\n' "$d"; else printf 
 source "$cf/skills/tools/lib/faketools.bash"
 source "$cf/lib/common.sh"; source "$cf/lib/gstack.sh"
 
+# The apply-path tests fake `bun` but not `bunx`, and a real bunx would hit the network from the
+# browser pre-extract. The pre-extract has its own no-network cases at the bottom of this file.
+export CLAUDEFILES_GSTACK_PREINSTALL=0
+
 WORK=""; BARE=""
 trap '[ -n "$WORK" ] && rm -rf "$WORK"; [ -n "$BARE" ] && rm -rf "$BARE"' EXIT
 
@@ -270,4 +274,53 @@ chk "stalled installer does not advance the marker" \
   [ "$(cat "$CLAUDEFILES_TARGET/.gstack-setup-head")" = "$_prev_marker" ]
 
 unset CLAUDEFILES_TARGET CLAUDEFILES_GSTACK_REPO GSTACK_FAKE_LOG
+
+# P: playwright pre-extract. The plan comes from a fake bunx, the archive from a fake curl, the
+# unzip is real; nothing touches the network.
+setup_fixture_home >/dev/null; hz="$HOME"
+pw_cache="$hz/.cache/ms-playwright"; clone="$hz/clone"; mkdir -p "$clone"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$hz/bin/bun"; chmod +x "$hz/bin/bun"
+cat > "$hz/bin/bunx" <<EOF
+#!/usr/bin/env bash
+cat <<PLAN
+browser: chromium version 145.0.0.0
+  Install location:    $pw_cache/chromium-9999
+  Download url:        https://example.invalid/chromium.zip
+browser: ffmpeg
+  Install location:    $pw_cache/ffmpeg-8888
+  Download url:        https://example.invalid/ffmpeg.zip
+PLAN
+EOF
+chmod +x "$hz/bin/bunx"
+python3 - "$hz/payload.zip" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], 'w') as z: z.writestr('chrome-linux/chrome', 'fake browser')
+PY
+cat > "$hz/bin/curl" <<EOF
+#!/usr/bin/env bash
+out=""
+while [ "\$#" -gt 0 ]; do if [ "\$1" = "-o" ]; then out="\$2"; shift 2; else shift; fi; done
+cp "$hz/payload.zip" "\$out"
+EOF
+chmod +x "$hz/bin/curl"; hash -r 2>/dev/null || true
+unset CLAUDEFILES_GSTACK_PREINSTALL
+_gstack_playwright_preinstall "$clone"; rc=$?
+chk "pre-extract returns 0"        [ "$rc" -eq 0 ]
+chk "browser payload extracted"    [ -f "$pw_cache/chromium-9999/chrome-linux/chrome" ]
+chk "completion marker written"    [ -e "$pw_cache/chromium-9999/INSTALLATION_COMPLETE" ]
+chk "second component extracted"   [ -e "$pw_cache/ffmpeg-8888/INSTALLATION_COMPLETE" ]
+
+# a completed location is skipped entirely: curl now fails, but is never reached
+printf '#!/usr/bin/env bash\nexit 22\n' > "$hz/bin/curl"; chmod +x "$hz/bin/curl"; hash -r 2>/dev/null || true
+: > "$pw_cache/chromium-9999/probe"
+_gstack_playwright_preinstall "$clone"; rc=$?
+chk "re-run returns 0"             [ "$rc" -eq 0 ]
+chk "completed dir left alone"     [ -e "$pw_cache/chromium-9999/probe" ]
+
+# an unreadable plan warns and leaves everything to the upstream installer
+printf '#!/usr/bin/env bash\nexit 1\n' > "$hz/bin/bunx"; chmod +x "$hz/bin/bunx"; hash -r 2>/dev/null || true
+out="$(_gstack_playwright_preinstall "$clone" 2>&1)"; rc=$?
+chk "unreadable plan returns 0"    [ "$rc" -eq 0 ]
+chk "unreadable plan warns"        bash -c 'grep -qi "install plan" <<<"$1"' _ "$out"
+
 [ "$fails" -eq 0 ] && echo "PASS test-gstack" || { echo "SOME test-gstack CASES FAILED"; exit 1; }

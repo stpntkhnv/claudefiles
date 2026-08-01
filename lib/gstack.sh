@@ -44,6 +44,62 @@ _gstack_prune() { # <clone_dir> <skills_dir> — drop gstack skills outside the 
 _gstack_repo() { echo "${CLAUDEFILES_GSTACK_REPO:-https://github.com/garrytan/gstack.git}"; }
 _gstack_ref()  { echo "${CLAUDEFILES_GSTACK_REF:-}"; }
 
+_trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
+
+# The installer's own `bunx playwright install chromium` reliably hangs mid-extract inside
+# distrobox containers: the download completes, then playwright's unzipper stops on the same byte
+# every run (measured 2026-08-01 in three containers; plain unzip handles the very same archive in
+# seconds). So the browsers are put in place BEFORE the installer runs — playwright itself is asked
+# where they go and what to download (`install --dry-run`), then curl + system unzip + the
+# INSTALLATION_COMPLETE marker playwright checks. With every location complete, the installer's
+# chromium.launch() probe succeeds and its extractor never runs. Best effort by design: every
+# failure path warns and returns 0, falling through to the upstream installer — no worse than
+# before.
+_gstack_playwright_preinstall() { # <clone_dir>; always 0
+  local dst="$1"
+  [ "${CLAUDEFILES_GSTACK_PREINSTALL:-1}" = 0 ] && return 0
+  command -v unzip >/dev/null 2>&1 || { warn "gstack: unzip not found, leaving browsers to the upstream installer"; return 0; }
+  command -v curl >/dev/null 2>&1 || return 0
+  # bun install first: bunx resolves playwright from the clone's node_modules, and without them the
+  # dry-run would fetch the LATEST playwright — a different browser revision than the pinned one
+  # the installer will probe for afterwards.
+  (cd "$dst" && timeout 300 bun install) >/dev/null 2>&1 || true
+  local dry
+  dry="$( (cd "$dst" && timeout 120 bunx playwright install chromium --dry-run) 2>/dev/null )" || dry=""
+  local line locs=() urls=()
+  while IFS= read -r line; do
+    case "$line" in
+      *"Install location:"*) locs+=("$(_trim "${line#*Install location:}")") ;;
+      *"Download url:"*)     urls+=("$(_trim "${line#*Download url:}")") ;;
+    esac
+  done <<<"$dry"
+  if [ "${#locs[@]}" -eq 0 ] || [ "${#locs[@]}" -ne "${#urls[@]}" ]; then
+    warn "gstack: could not read playwright's install plan, leaving browsers to the upstream installer"
+    return 0
+  fi
+  local i loc base tmp cache=""
+  for i in "${!locs[@]}"; do
+    loc="${locs[$i]}"; [ -n "$loc" ] || continue
+    cache="${loc%/*}"; base="${loc##*/}"
+    [ -e "$loc/INSTALLATION_COMPLETE" ] && continue
+    tmp="$(mktemp "${TMPDIR:-/tmp}/gstack-pw-XXXXXX")" || return 0
+    if curl -fsSL --retry 2 -m 900 -o "$tmp" "${urls[$i]}" \
+        && rm -rf "$loc" && mkdir -p "$loc" \
+        && unzip -q "$tmp" -d "$loc"; then
+      : > "$loc/INSTALLATION_COMPLETE"
+      log "gstack: pre-extracted $base"
+    else
+      rm -rf "$loc"
+      warn "gstack: pre-extract of $base failed, leaving it to the upstream installer"
+    fi
+    rm -f "$tmp"
+  done
+  # A previously hung-and-killed install can leave playwright's lock behind, and the next install
+  # waits on it instead of running.
+  [ -n "$cache" ] && rm -rf "$cache/__dirlock"
+  return 0
+}
+
 gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/unchanged, 1 = failed.
   local repo; repo="$(_gstack_repo)"
   # Unset (the default) tracks upstream HEAD. Set to a tag/branch/SHA, the clone is held at that
@@ -116,6 +172,8 @@ gstack_apply() {   # no args; target comes from CLAUDEFILES_TARGET. 0 = ok/uncha
   # timeout bounds what stdin cannot: observed live, the installer's `bunx playwright install
   # chromium` stalled mid-download and sat for 12h with zero progress, which would hang setup.sh
   # forever. A wrong default beats an unbounded wait; the marker stays unwritten either way.
+  _gstack_playwright_preinstall "$dst"
+
   local secs="${CLAUDEFILES_GSTACK_TIMEOUT:-1800}" rc=0
   ( cd "$dst" && GSTACK_SKIP_FONTS=1 timeout "$secs" ./setup --host claude --no-team --no-plan-tune-hooks -q < /dev/null ) || rc=$?
   if [ "$rc" -eq 0 ]; then
