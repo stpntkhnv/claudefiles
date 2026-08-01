@@ -1,6 +1,6 @@
 # claudefiles
 
-Самостоятельный репозиторий, который ставит конфигурацию Claude Code одной идемпотентной командой — в виде нескольких независимых **профилей**, каждый в своём каталоге. `setup.sh` всегда раскатывает лёгкий профиль **vanilla** (`~/.claude`, обычный `claude`): статуслайн, личный `CLAUDE.md`, Context7 MCP, светлая тема — без плагинов и хуков. По выбору добавляется **super** (`~/.claude-super`, команда `claude-super`) — сегодняшний полный superpowers-стек, байт-в-байт. По выбору же добавляется **g** (`~/.claude-g`, команда `claude-g`) — этап видения поверх стороннего инструмента [gstack](https://github.com/garrytan/gstack). Каждый профиль — рецепт (`lib/profiles.sh`) над общими модулями `lib/*.sh`; при первом запуске существующий super-стек в `~/.claude` конвертируется в vanilla (секреты сохраняются). chezmoi тянет этот репозиторий как external и перезапускает `setup.sh` при изменении HEAD. Секреты спрашиваются один раз в локальное хранилище вне git — ничего секретного в репозиторий не попадает.
+Самостоятельный репозиторий, который ставит конфигурацию Claude Code одной идемпотентной командой — в виде нескольких независимых **профилей**, каждый в своём каталоге. `setup.sh` всегда раскатывает лёгкий профиль **vanilla** (`~/.claude`, обычный `claude`): статуслайн, личный `CLAUDE.md`, Context7 MCP, светлая тема — без плагинов и хуков. По выбору добавляется **super** (`~/.claude-super`, команда `claude-super`) — сегодняшний полный superpowers-стек, байт-в-байт. По выбору же добавляется **g** (`~/.claude-g`, команда `claude-g`) — этап видения поверх стороннего инструмента [gstack](https://github.com/garrytan/gstack). Каждый профиль — рецепт (`lib/profiles.sh`) над общими модулями `lib/*.sh`; при первом запуске существующий super-стек в `~/.claude` конвертируется в vanilla (секреты сохраняются). chezmoi тянет этот репозиторий как external; `setup.sh` запускается руками — чеклист chezmoi подсказывает, когда HEAD клона сдвинулся. Секреты спрашиваются один раз в локальное хранилище вне git — ничего секретного в репозиторий не попадает.
 
 ## Профили
 
@@ -58,7 +58,7 @@
 chezmoi init --apply stpntkhnv/dotfiles
 ```
 
-chezmoi ставит `claude` CLI, тянет claudefiles как `git-repo` external в `~/.local/share/claudefiles` и через `run_after`-триггер запускает `setup.sh` (сравнивая HEAD, чтобы не гонять зря).
+chezmoi ставит `claude` CLI и тянет claudefiles как `git-repo` external в `~/.local/share/claudefiles`. `setup.sh` он с 2026-08-01 НЕ запускает: финальный чеклист apply сравнивает HEAD клона с `~/.config/claudefiles/last-applied-head` и, пока они расходятся, печатает команду ручного запуска; маркер пишет сам `setup.sh` в конце успешного прогона.
 
 ### Напрямую (разработка)
 
@@ -119,7 +119,7 @@ cp -a ~/.config/claudefiles/clean-backups/<время>/<профиль>/. ~/.cla
 - **`secrets.json`** — флаги (`profile_super`, `profile_gstack`, `context7`, `linear`, `playwright`, `azure_mcp`, `ado`, `dotnet_skills`, `codex_review`, `codex_plugin`), `context7_api_key`, ADO email/orgs/PAT-ы. Заполняется prompt-once при TTY. Авторизацию Codex (`~/.codex/auth.json`) и OAuth-токен Linear claudefiles **не** трогает — это `codex login` и `claude mcp login linear`.
 - **`managed-mcp.<profile>.json`** — манифест применённых MCP-серверов профиля (для сверки и удаления ровно своего); содержит base64-PAT для ADO (в профиле super), поэтому тоже `600`. Legacy `managed-mcp.json` (из до-профильной раскладки) потребляется один раз при миграции дефолтного каталога и затем удаляется.
 
-Миграция на существующей машине: `linear` — такой же обязательный флаг, как `profile_gstack`: `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`) падает с `missing required flag 'flags.linear'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
+Миграция на существующей машине: `linear` — такой же обязательный флаг, как `profile_gstack`: `./setup.sh --non-interactive` падает с `missing required flag 'flags.linear'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
 ```bash
 python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
   ~/.config/claudefiles/secrets.json flags.linear false
@@ -159,7 +159,7 @@ CLAUDEFILES_KB_SMOKE=1 bash skills/tools/smoke-kb.sh
 
 Синхронизация волта между машинами (Syncthing, Obsidian Sync) — отдельная задача, claudefiles её не настраивает. Если волт синкается, помните: приватная проектная память покидает машину, поэтому политика в `rules/kb.md` запрещает писать туда секреты, а синк лучше включать списком того, что синкается, а не списком исключений.
 
-Миграция на существующей машине: `kb`, как `linear` и `profile_gstack`, обязательный флаг — `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`) падает с `missing required flag 'flags.kb'`, пока он не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
+Миграция на существующей машине: `kb`, как `linear` и `profile_gstack`, обязательный флаг — `./setup.sh --non-interactive` падает с `missing required flag 'flags.kb'`, пока он не заведён. Один раз запустить `./setup.sh` из терминала — или засеять без TTY:
 ```bash
 python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
   ~/.config/claudefiles/secrets.json flags.kb false
@@ -203,7 +203,7 @@ python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
   ```bash
   CLAUDEFILES_GSTACK_REF=9f2c1ab ./setup.sh      # тег, ветка или SHA просмотренной ревизии
   ```
-  Пин живёт в окружении, а не в `secrets.json`: chezmoi-триггер `run_after` про него не знает, поэтому для постоянного пина переменную надо экспортировать там, откуда запускается `setup.sh` (shell rc или окружение chezmoi).
+  Пин живёт в окружении, а не в `secrets.json`: для постоянного пина переменную надо экспортировать там, откуда запускается `setup.sh` (обычно shell rc — с 2026-08-01 `setup.sh` запускают руками, не из chezmoi).
 - **Провал профиля `g` изолирован.** Провал любого шага (fetch/reset/clone/rm/mkdir/запись маркера/сам инсталлятор) возвращает 1, и `recipe_g` роняет ровно профиль `g` (`lib/profiles.sh:49`), не трогая `vanilla` и `super`. Исключение — недоступный апстрим при уже установленной и совпадающей с маркером ревизии: обновление пропускается с `WARN`, профиль остаётся зелёным (`lib/gstack.sh:53-54`), иначе оффлайн-прогон ронял бы корректный профиль. Инсталлятор всегда получает `< /dev/null`: новый вопрос в апстриме должен ронять прогон, а не подвешивать его. Отдельно от stdin инсталлятор обёрнут в `timeout` (по умолчанию 1800 с, переопределяется `CLAUDEFILES_GSTACK_TIMEOUT`): на живом прогоне загрузка Chromium внутри gstack сорвалась и провисела 12 часов без единого байта прогресса — `< /dev/null` там не помогает, процесс ждёт не нас. По таймауту профиль `g` падает с явным сообщением, маркер не пишется, следующий прогон повторяет попытку.
 - **Известная проблема апстрима: `playwright install` не завершается.** На этой машине команда делает свою работу и после этого висит вечно — даже когда скачивать нечего (0.5 с CPU, дальше бесконечное ожидание); в distrobox-контейнерах распаковщик детерминированно виснет посреди архива, который системный `unzip` разбирает за секунды. Сеть ни при чём: те же архивы качаются напрямую на 29 МБ/с. gstack вызывает её (`setup:479`) только если не смог запустить браузер. Поэтому с 2026-08-01 браузеры кладутся в кэш ДО инсталлятора: `_gstack_playwright_preinstall` (`lib/gstack.sh`) спрашивает у playwright план (`bunx playwright install chromium --dry-run`), качает архивы `curl`, распаковывает системным `unzip` и ставит маркеры `INSTALLATION_COMPLETE` — проверка `chromium.launch()` апстрима проходит, и его распаковщик не запускается вовсе. Любой сбой преинсталла — только `WARN`, дальше апстримный путь как раньше; отключается `CLAUDEFILES_GSTACK_PREINSTALL=0`. Тот же обход руками, если преинсталл почему-то не смог (ревизия `1208` и версия `145.0.7632.6` — из `playwright` в `package.json` апстрима, при обновлении поменяются):
   ```bash
@@ -215,7 +215,7 @@ python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
   done; rm -f /tmp/pw.zip
   ```
   После этого `CLAUDEFILES_GSTACK_SMOKE=1 bash skills/tools/smoke-gstack.sh` проходит целиком: установка, скиллы в профиле, второй прогон no-op, `~/.claude` не тронут.
-- **Миграция на существующей машине.** `profile_gstack` — обязательный флаг: `./setup.sh --non-interactive` (и chezmoi-триггер `run_after`, который ходит именно так) падает с `missing required flag 'flags.profile_gstack'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала (спросит) — или засеять без TTY:
+- **Миграция на существующей машине.** `profile_gstack` — обязательный флаг: `./setup.sh --non-interactive` падает с `missing required flag 'flags.profile_gstack'`, пока флаг не заведён. Один раз запустить `./setup.sh` из терминала (спросит) — или засеять без TTY:
   ```bash
   python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
     ~/.config/claudefiles/secrets.json flags.profile_gstack false
@@ -250,7 +250,7 @@ legacy/claude/                # прежнее содержимое (агент�
 - [docs/invariants.md](docs/invariants.md): гарантии тест-сьюта
 - [docs/config-schema.md](docs/config-schema.md): схема secrets.json
 
-Управляемая цепочка chezmoi (в репозитории dotfiles): external `.chezmoiexternal.toml` → `run_after_setup-claudefiles.sh.tmpl` (HEAD-compare → `setup.sh`).
+Управляемая цепочка chezmoi (в репозитории dotfiles): external `.chezmoiexternal.toml` тянет клон; финальный чеклист apply (`run_after_zz-next-steps.sh.tmpl`) сравнивает HEAD с `last-applied-head` и подсказывает запустить `setup.sh` руками.
 
 ## Legacy
 

@@ -103,6 +103,15 @@ if [ "${#failed[@]}" -gt 0 ]; then
 fi
 if [ "$CLEAN" = true ]; then log "clean: backup kept at $CLAUDEFILES_CLEAN_BACKUP"; fi
 
+# The chezmoi side no longer runs this script automatically: its final checklist compares the
+# clone's HEAD against this marker and nags until they match, so a successful run must record
+# what it applied. Behind the failed-profiles gate on purpose — a half-applied revision must
+# keep nagging.
+if _applied_head="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"; then
+  _state="${CLAUDEFILES_STATE_DIR:-$HOME/.config/claudefiles}"
+  mkdir -p "$_state"; printf '%s' "$_applied_head" > "$_state/last-applied-head"
+fi
+
 # After the failed-profile gate on purpose: if a profile is broken, an OAuth browser flow is the
 # last thing the user needs. Each profile in its own subshell, exactly like provision_selected —
 # `claude mcp login` targets whatever CLAUDE_CONFIG_DIR points at.
