@@ -53,7 +53,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
   config_ensure_flag linear        "Enable Linear MCP (issue tracker, one-time OAuth login)? (y/N)"
   config_ensure_flag kb            "Enable the shared knowledge base (auto memory in an Obsidian vault)? (y/N)"
   if [ "$(config_flag kb)" = true ]; then
-    config_ensure_optional kb.vault_path "Knowledge base vault path (empty = ~/Documents/Notes/kb)"
+    config_ensure_optional kb.vault_path "Knowledge base vault path (empty = ~/Documents/Notes/kb; in a container name the HOST vault explicitly)"
     kb_vault_path >/dev/null    # fail fast: a bad stored path must not surface inside a recipe
   fi
 }

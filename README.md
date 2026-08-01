@@ -133,6 +133,7 @@ python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
 
 ```
 <волт>/                          # по умолчанию ~/Documents/Notes/kb, переопределяется kb.vault_path
+                                 # (в контейнере умолчания нет: путь к хостовому волту обязателен)
 ├── projects/<slug>/memory/      # проектная память, раскладку строит сам CLI; slug от корня git-репо
 │   └── MEMORY.md                # индекс проекта, грузится в каждую сессию (200 строк / 25 КБ)
 ├── global/                      # кросс-проектные заметки

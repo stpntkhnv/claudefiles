@@ -8,7 +8,7 @@
 - `ado.email`, `ado.orgs` (массив), `ado.pat.<org>` (секрет per-org).
 - `context7_api_key` (секрет, пусто = free tier).
 - `playwright.chromium_path` (override пути к chromium).
-- `kb.vault_path` (optional, пусто = `~/Documents/Notes/kb`): каталог волта базы знаний. Абсолютный путь или `~/`; относительный и любой путь с `..` отвергаются в `kb_vault_path` (`lib/kb.sh:12`) до провижна, в фазе config.
+- `kb.vault_path` (optional, пусто = `~/Documents/Notes/kb`): каталог волта базы знаний. Абсолютный путь или `~/`; относительный и любой путь с `..` отвергаются в `kb_vault_path` (`lib/kb.sh`) до провижна, в фазе config. Внутри контейнера (`/run/.containerenv`/`/.dockerenv`) пустое значение тоже отвергается: `$HOME` там — дом контейнера, и умолчание завело бы одноразовый волт, умирающий вместе с ним; путь к хостовому волту обязателен.
 - `linear` секретов не требует: сервер удалённый (`https://mcp.linear.app/mcp`), авторизация через OAuth, токен хранит Claude Code, а не claudefiles.
 
 ## Манифест managed-kb.&lt;profile&gt;.json

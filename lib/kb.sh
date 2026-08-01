@@ -7,11 +7,23 @@ _KB_DEFAULT_VAULT="Documents/Notes/kb"
 
 _kb_manifest() { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-kb.$1.json"; }
 
+# Overridable in tests; /run/.containerenv is podman, /.dockerenv is docker.
+_kb_in_container() { [ -e /run/.containerenv ] || [ -e /.dockerenv ]; }
+
 # A relative path is not merely inconvenient: the CLI itself rejects a relative autoMemoryDirectory,
 # and a path with '..' would let a typo in secrets.json point the store at an unrelated tree.
+#
+# Inside a container the $HOME default is refused outright: $HOME there is the container's own home,
+# so the default would silently seed a throwaway vault that dies with the container and never syncs
+# — the setup message would even print the same '~/...' path while meaning a different directory.
+# Required config fails fast instead (found the hard way: 3 containers x 3 profiles all pointed at
+# container-local vaults).
 kb_vault_path() {
   local raw; raw="$(config_get kb.vault_path)"
-  [ -z "$raw" ] && raw="$HOME/$_KB_DEFAULT_VAULT"
+  if [ -z "$raw" ]; then
+    _kb_in_container && die "kb.vault_path is not set and this is a container: the default \$HOME/$_KB_DEFAULT_VAULT would land in the container home, not the host vault. Set kb.vault_path to the host vault (e.g. /home/<user>/$_KB_DEFAULT_VAULT)"
+    raw="$HOME/$_KB_DEFAULT_VAULT"
+  fi
   case "$raw" in
     "~")   raw="$HOME" ;;
     "~/"*) raw="$HOME/${raw#\~/}" ;;

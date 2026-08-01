@@ -34,6 +34,14 @@ chk "filesystem root dies"     dies kb_vault_path
 config_set kb.vault_path ""
 chk "empty falls back to default" [ "$(kb_vault_path)" = "$h/Documents/Notes/kb" ]
 
+# In a container the default must refuse rather than seed a vault in the container's own home.
+_kb_in_container() { return 0; }
+chk "empty in container dies"       dies kb_vault_path
+config_set kb.vault_path "/srv/kb"
+chk "explicit path in container ok" [ "$(kb_vault_path)" = "/srv/kb" ]
+config_set kb.vault_path ""
+source "$cf/lib/kb.sh"   # restore the real _kb_in_container
+
 chk "manifest path per profile" \
   [ "$(_kb_manifest super)" = "$CLAUDEFILES_CONFIG_DIR/managed-kb.super.json" ]
 
