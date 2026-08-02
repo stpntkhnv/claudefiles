@@ -8,7 +8,9 @@
 - `ado.email`, `ado.orgs` (массив), `ado.pat.<org>` (секрет per-org).
 - `context7_api_key` (секрет, пусто = free tier).
 - `playwright.chromium_path` (override пути к chromium).
-- `kb.vault_path` (optional, пусто = `~/Documents/Notes/kb`): каталог волта базы знаний. Абсолютный путь или `~/`; относительный и любой путь с `..` отвергаются в `kb_vault_path` (`lib/kb.sh:12`) до провижна, в фазе config.
+- `kb.vault_path` (optional, пусто = `~/Documents/Notes/kb`): каталог волта базы знаний. Абсолютный путь или `~/`; относительный и любой путь с `..` отвергаются в `kb_vault_path` (`lib/kb.sh:12`) до провижна, в фазе config. Пустое значение внутри контейнера (`_kb_in_container`, `lib/kb.sh:10-13`) — `die`, а не дефолт: дефолт от контейнерного `$HOME` завёл бы второй волт вне синхронизации.
+- `kb.context` (обязательный при `flags.kb=true`, спрашивается всегда): имя (`[a-z0-9-]+`) или литерал `none`. Валидатор `kb_context_name` (`lib/kb.sh`) отвергает всё остальное — слэши, точки, пробелы, пустую строку — через `die`. Определяет слой `<волт>/contexts/<имя>/`, проводимый в `$HOME/main` функцией `kb_workspace_apply`.
+- `kb.machine` (обязательный при `flags.kb=true`, спрашивается только вне контейнера): тот же формат и валидатор (`kb_machine_name`). Определяет слой `<волт>/machine/<имя>/`, проводимый в `$HOME/system`. Внутри контейнера не спрашивается и не применяется — `~/system` хостовая папка.
 - `linear` секретов не требует: сервер удалённый (`https://mcp.linear.app/mcp`), авторизация через OAuth, токен хранит Claude Code, а не claudefiles.
 
 ## Манифест managed-kb.&lt;profile&gt;.json

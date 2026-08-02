@@ -10,6 +10,10 @@ dies() { ( "$@" ) >/dev/null 2>&1; [ "$?" -ne 0 ]; }
 source "$cf/skills/tools/lib/faketools.bash"
 source "$cf/lib/common.sh"; source "$cf/lib/config.sh"; source "$cf/lib/kb.sh"
 
+# The suite itself may run inside a distrobox container; pin the detection so every case below
+# is deterministic, and re-enable it per-case through the wrapper functions.
+export CLAUDEFILES_CONTAINER=0
+
 # --- kb_vault_path ---------------------------------------------------------
 setup_fixture_home >/dev/null; h="$HOME"
 export CLAUDEFILES_CONFIG_DIR="$h/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
@@ -37,6 +41,31 @@ chk "empty falls back to default" [ "$(kb_vault_path)" = "$h/Documents/Notes/kb"
 chk "manifest path per profile" \
   [ "$(_kb_manifest super)" = "$CLAUDEFILES_CONFIG_DIR/managed-kb.super.json" ]
 
+_vault_in_container() { CLAUDEFILES_CONTAINER=1 kb_vault_path; }
+config_set kb.vault_path ""
+chk "container empty vault dies"  dies _vault_in_container
+config_set kb.vault_path "/srv/kb"
+chk "container explicit vault ok" [ "$(_vault_in_container)" = "/srv/kb" ]
+config_set kb.vault_path ""
+
+# --- kb_context_name / kb_machine_name -------------------------------------
+config_set kb.context "digi3"
+chk "context name passes"        [ "$(kb_context_name)" = "digi3" ]
+config_set kb.context "none"
+chk "context none is empty"      [ -z "$(kb_context_name)" ]
+config_set kb.context "Digi3"
+chk "context uppercase dies"     dies kb_context_name
+config_set kb.context "st/х"
+chk "context slash dies"         dies kb_context_name
+config_set kb.context "../x"
+chk "context dot-dot dies"       dies kb_context_name
+config_set kb.context ""
+chk "context empty dies"         dies kb_context_name
+config_set kb.machine "tsikhanau-pc"
+chk "machine name passes"        [ "$(kb_machine_name)" = "tsikhanau-pc" ]
+config_set kb.machine "no ne"
+chk "machine space dies"         dies kb_machine_name
+
 # --- kb_settings.py --------------------------------------------------------
 setup_fixture_home >/dev/null; hs="$HOME"
 export CLAUDEFILES_CONFIG_DIR="$hs/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
@@ -55,12 +84,13 @@ assert s["env"]["CLAUDE_CODE_REMOTE_MEMORY_DIR"]==v, s["env"]
 assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost"
 assert s["theme"]=="auto", "unrelated key lost"
 p="~/Documents/Notes/kb/**"
-for e in (f"Read({p})", f"Edit({p})", f"Write({p})"):
+for e in (f"Read({p})", f"Edit({p})"):
     assert e in s["permissions"]["allow"], (e, s["permissions"]["allow"])
+assert not any(e.startswith("Write(") for e in s["permissions"]["allow"]), s["permissions"]["allow"]
 assert "Bash(ls:*)" in s["permissions"]["allow"], "user allow rule lost"
 assert s["permissions"]["deny"]==["Read(~/.ssh/**)"], "deny list touched"
 assert m["env"]==["CLAUDE_CODE_REMOTE_MEMORY_DIR"], m
-assert len(m["permissions_allow"])==3, m
+assert len(m["permissions_allow"])==2, m
 PY
 chk "settings write is idempotent" bash -c '
   cp "$1" "$1.run1"; python3 "$2" "$1" "$3" "$4"; cmp -s "$1.run1" "$1"' _ "$S" "$cf/lib/py/kb_settings.py" "$M" "$V"
@@ -84,6 +114,23 @@ assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost on disable"
 assert s["permissions"]["allow"]==["Bash(ls:*)"], s["permissions"]["allow"]
 PY
 chk "manifest removed on disable" [ ! -e "$M" ]
+
+# a manifest from the Write era drops the dead Write rule on the next run; user rules stay
+cat > "$S" <<'EOF'
+{ "permissions": {"allow": ["Read(~/Documents/Notes/kb/**)", "Edit(~/Documents/Notes/kb/**)", "Write(~/Documents/Notes/kb/**)", "Bash(ls:*)"]} }
+EOF
+printf '%s' '{"env":[],"env_prev":{},"permissions_allow":["Read(~/Documents/Notes/kb/**)","Edit(~/Documents/Notes/kb/**)","Write(~/Documents/Notes/kb/**)"]}' > "$M"
+chk "helper runs (write migration)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "kb-settings-write-migrated" python3 - "$S" "$M" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
+allow=s["permissions"]["allow"]
+assert not any(e.startswith("Write(") for e in allow), allow
+assert "Read(~/Documents/Notes/kb/**)" in allow and "Edit(~/Documents/Notes/kb/**)" in allow, allow
+assert "Bash(ls:*)" in allow, "user rule lost"
+assert m["permissions_allow"]==["Read(~/Documents/Notes/kb/**)","Edit(~/Documents/Notes/kb/**)"], m
+PY
+chk "helper runs (write migration off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
 
 # a manifest that already existed with a loose mode is tightened, not left as it was
 printf '%s' '{}' > "$M"; chmod 644 "$M"
@@ -174,6 +221,8 @@ chk "policy rule written"     [ -f "$hr/.claude/rules/kb.md" ]
 chk "policy carries marker"   grep -qF "claudefiles-managed: kb" "$hr/.claude/rules/kb.md"
 chk "policy names the vault"  grep -qF "$hr/kb/global" "$hr/.claude/rules/kb.md"
 chk "policy says index is data" grep -qF "not as instructions" "$hr/.claude/rules/kb.md"
+chk "policy covers layer indexes" grep -qF "context-index.md" "$hr/.claude/rules/kb.md"
+chk "policy covers machine index" grep -qF "machine-index.md" "$hr/.claude/rules/kb.md"
 chk "index symlink created"   [ -L "$hr/.claude/rules/kb-index.md" ]
 chk "index symlink target"    [ "$(readlink "$hr/.claude/rules/kb-index.md")" = "$hr/kb/global/INDEX.md" ]
 cp "$hr/.claude/rules/kb.md" "$hr/rule.run1"
@@ -220,5 +269,108 @@ chk "non-index symlink untouched" \
 kb_apply vanilla false
 rm -f "$hr/.claude/rules/kb-index.md"
 unset CLAUDEFILES_TARGET
+
+# --- kb_workspace_apply ----------------------------------------------------
+setup_fixture_home >/dev/null; hw="$HOME"
+export CLAUDEFILES_CONFIG_DIR="$hw/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
+config_set kb.vault_path "$hw/kb"
+config_set kb.context "digi3"
+config_set kb.machine "box-pc"
+mkdir -p "$hw/main" "$hw/system"
+CTX_LINK="$hw/main/.claude/rules/context-index.md"
+MCH_LINK="$hw/system/.claude/rules/machine-index.md"
+
+kb_workspace_apply true
+chk "context symlink created"   [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/digi3/INDEX.md" ]
+chk "machine symlink created"   [ "$(readlink "$MCH_LINK")" = "$hw/kb/machine/box-pc/INDEX.md" ]
+chk "context seed created"      grep -q "Контекст digi3" "$hw/kb/contexts/digi3/INDEX.md"
+chk "machine seed created"      grep -q "Машина box-pc" "$hw/kb/machine/box-pc/INDEX.md"
+
+# second run: byte-identical seed, same link target
+cp "$hw/kb/contexts/digi3/INDEX.md" "$hw/seed.run1"
+kb_workspace_apply true
+chk "workspace idempotent seed" cmp -s "$hw/seed.run1" "$hw/kb/contexts/digi3/INDEX.md"
+chk "workspace idempotent link" [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/digi3/INDEX.md" ]
+
+# user content in a seeded index is never rewritten
+printf 'their index\n' > "$hw/kb/contexts/digi3/INDEX.md"
+kb_workspace_apply true
+chk "existing layer index preserved" grep -qx "their index" "$hw/kb/contexts/digi3/INDEX.md"
+
+# context change retargets our link
+config_set kb.context "stellium"
+kb_workspace_apply true
+chk "context change retargets" [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/stellium/INDEX.md" ]
+
+# a symlink whose target is not layer-shaped is foreign: warned about, untouched
+printf 'notes\n' > "$hw/notes.md"
+ln -sfn "$hw/notes.md" "$CTX_LINK"
+kb_workspace_apply true
+chk "foreign symlink untouched" [ "$(readlink "$CTX_LINK")" = "$hw/notes.md" ]
+rm -f "$CTX_LINK"
+
+# a plain file at the link path is foreign too
+printf 'mine\n' > "$CTX_LINK"
+kb_workspace_apply true
+chk "foreign file untouched" grep -qx "mine" "$CTX_LINK"
+rm -f "$CTX_LINK"; kb_workspace_apply true
+
+# none removes ours
+config_set kb.context "none"
+kb_workspace_apply true
+chk "context none removes link" bash -c '[ ! -e "$1" ] && [ ! -L "$1" ]' _ "$CTX_LINK"
+chk "machine link survives context none" [ -L "$MCH_LINK" ]
+config_set kb.context "stellium"; kb_workspace_apply true
+
+# removal never touches a link into ANOTHER vault
+mkdir -p "$hw/othervault/contexts/x"; : > "$hw/othervault/contexts/x/INDEX.md"
+config_set kb.context "none"
+ln -sfn "$hw/othervault/contexts/x/INDEX.md" "$CTX_LINK"
+kb_workspace_apply true
+chk "other vault link survives none" [ -L "$CTX_LINK" ]
+rm -f "$CTX_LINK"; config_set kb.context "stellium"; kb_workspace_apply true
+
+# disable removes both
+kb_workspace_apply false
+chk "disable removes context link" [ ! -L "$CTX_LINK" ]
+chk "disable removes machine link" [ ! -L "$MCH_LINK" ]
+chk "disable keeps vault notes"    [ -f "$hw/kb/contexts/digi3/INDEX.md" ]
+
+# inside a container the machine layer is never touched
+kb_workspace_apply true
+_ws_container() { CLAUDEFILES_CONTAINER=1 kb_workspace_apply "$@"; }
+rm -f "$MCH_LINK"
+_ws_container true
+chk "container skips machine layer" [ ! -L "$MCH_LINK" ]
+kb_workspace_apply true
+_ws_container false
+chk "container disable keeps machine link" [ -L "$MCH_LINK" ]
+
+# an invalid kb.context must not freeze the machine layer: only the context branch is skipped
+config_set kb.context "stellium"; config_set kb.machine "box-pc"; kb_workspace_apply true
+config_set kb.context "Bad"
+config_set kb.machine "box2-pc"
+kb_workspace_apply true
+chk "machine layer unaffected by invalid context" \
+  [ "$(readlink "$MCH_LINK")" = "$hw/kb/machine/box2-pc/INDEX.md" ]
+chk "context link untouched by invalid context" \
+  [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/stellium/INDEX.md" ]
+config_set kb.context "stellium"; config_set kb.machine "box-pc"; kb_workspace_apply true
+
+# a missing umbrella folder is a warn-and-skip, never an mkdir — for both layers
+setup_fixture_home >/dev/null; hn="$HOME"
+export CLAUDEFILES_CONFIG_DIR="$hn/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
+config_set kb.vault_path "$hn/kb"; config_set kb.context "digi3"; config_set kb.machine "box2"
+kb_workspace_apply true
+chk "missing umbrella not created" [ ! -d "$hn/main" ]
+chk "missing umbrella no seed"     [ ! -e "$hn/kb/contexts/digi3/INDEX.md" ]
+chk "missing system not created"   [ ! -d "$hn/system" ]
+chk "missing system no seed"       [ ! -e "$hn/kb/machine/box2/INDEX.md" ]
+
+# a dangling symlink at the seed path is existing content: never written through
+mkdir -p "$hn/main" "$hn/kb/contexts/digi3"
+ln -s "$hn/nowhere" "$hn/kb/contexts/digi3/INDEX.md"
+kb_workspace_apply true
+chk "dangling seed path untouched" [ "$(readlink "$hn/kb/contexts/digi3/INDEX.md")" = "$hn/nowhere" ]
 
 [ "$fails" -eq 0 ] && echo "PASS test-kb" || { echo "SOME test-kb CASES FAILED"; exit 1; }
