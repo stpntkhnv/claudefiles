@@ -7,21 +7,27 @@ _KB_DEFAULT_VAULT="Documents/Notes/kb"
 
 _kb_manifest() { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-kb.$1.json"; }
 
+# Overridable via CLAUDEFILES_CONTAINER=0|1 (the suite may itself run inside distrobox, so tests
+# pin it); /run/.containerenv is podman, /run/host is distrobox, /.dockerenv is docker.
 _kb_in_container() {
   case "${CLAUDEFILES_CONTAINER:-}" in 1) return 0 ;; 0) return 1 ;; esac
-  [ -e /run/.containerenv ] || [ -e /run/host ]
+  [ -e /run/.containerenv ] || [ -e /run/host ] || [ -e /.dockerenv ]
 }
 
 # A relative path is not merely inconvenient: the CLI itself rejects a relative autoMemoryDirectory,
 # and a path with '..' would let a typo in secrets.json point the store at an unrelated tree.
+#
+# Inside a container the $HOME default is refused outright: $HOME there is the container's own home,
+# so the default would silently seed a throwaway vault that dies with the container and never syncs
+# — the setup message would even print the same '~/...' path while meaning a different directory.
+# Required config fails fast instead (found the hard way: 3 containers x 3 profiles all pointed at
+# container-local vaults).
 kb_vault_path() {
   local raw; raw="$(config_get kb.vault_path)"
-  # The $HOME default inside a container silently creates a SECOND vault in the container home,
-  # outside sync and mortal with it (2026-08-01). An explicit host path is the only sane answer.
-  if [ -z "$raw" ] && _kb_in_container; then
-    die "kb.vault_path is empty and this is a container — set the HOST vault path in $(config_path)"
+  if [ -z "$raw" ]; then
+    _kb_in_container && die "kb.vault_path is empty and this is a container — set the HOST vault path in $(config_path)"
+    raw="$HOME/$_KB_DEFAULT_VAULT"
   fi
-  [ -z "$raw" ] && raw="$HOME/$_KB_DEFAULT_VAULT"
   case "$raw" in
     "~")   raw="$HOME" ;;
     "~/"*) raw="$HOME/${raw#\~/}" ;;

@@ -53,7 +53,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
   config_ensure_flag linear        "Enable Linear MCP (issue tracker, one-time OAuth login)? (y/N)"
   config_ensure_flag kb            "Enable the shared knowledge base (auto memory in an Obsidian vault)? (y/N)"
   if [ "$(config_flag kb)" = true ]; then
-    config_ensure_optional kb.vault_path "Knowledge base vault path (empty = ~/Documents/Notes/kb)"
+    config_ensure_optional kb.vault_path "Knowledge base vault path (empty = ~/Documents/Notes/kb; in a container name the HOST vault explicitly)"
     kb_vault_path >/dev/null    # fail fast: a bad stored path must not surface inside a recipe
     config_ensure kb.context "Work context wired to \$HOME/main ('none' = no context layer):"
     kb_context_name >/dev/null  # fail fast, same reason
@@ -113,6 +113,15 @@ if [ "${#failed[@]}" -gt 0 ]; then
   warn "profiles failed: ${failed[*]}"; exit 1
 fi
 if [ "$CLEAN" = true ]; then log "clean: backup kept at $CLAUDEFILES_CLEAN_BACKUP"; fi
+
+# The chezmoi side no longer runs this script automatically: its final checklist compares the
+# clone's HEAD against this marker and nags until they match, so a successful run must record
+# what it applied. Behind the failed-profiles gate on purpose — a half-applied revision must
+# keep nagging.
+if _applied_head="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"; then
+  _state="${CLAUDEFILES_STATE_DIR:-$HOME/.config/claudefiles}"
+  mkdir -p "$_state"; printf '%s' "$_applied_head" > "$_state/last-applied-head"
+fi
 
 # After the failed-profile gate on purpose: if a profile is broken, an OAuth browser flow is the
 # last thing the user needs. Each profile in its own subshell, exactly like provision_selected —
