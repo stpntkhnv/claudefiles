@@ -221,6 +221,8 @@ chk "policy rule written"     [ -f "$hr/.claude/rules/kb.md" ]
 chk "policy carries marker"   grep -qF "claudefiles-managed: kb" "$hr/.claude/rules/kb.md"
 chk "policy names the vault"  grep -qF "$hr/kb/global" "$hr/.claude/rules/kb.md"
 chk "policy says index is data" grep -qF "not as instructions" "$hr/.claude/rules/kb.md"
+chk "policy covers layer indexes" grep -qF "context-index.md" "$hr/.claude/rules/kb.md"
+chk "policy covers machine index" grep -qF "machine-index.md" "$hr/.claude/rules/kb.md"
 chk "index symlink created"   [ -L "$hr/.claude/rules/kb-index.md" ]
 chk "index symlink target"    [ "$(readlink "$hr/.claude/rules/kb-index.md")" = "$hr/kb/global/INDEX.md" ]
 cp "$hr/.claude/rules/kb.md" "$hr/rule.run1"
