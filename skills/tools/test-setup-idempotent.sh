@@ -2,6 +2,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; cf="$(cd "$here/../.." && pwd)"
 source "$cf/skills/tools/lib/faketools.bash"; setup_fixture_home >/dev/null; h="$HOME"
+export CLAUDEFILES_CONTAINER=0   # the suite may itself run inside distrobox; pin the detection
 # fake pacman/sudo so the deps phase can never mutate the real system: if any phase shelled out
 # to pacman/sudo it would append to $PACLOG, and the assertion near the end would fail. What
 # this proves: a full non-interactive (ASSUME_TTY=0) run of setup.sh is a clean no-op — no phase
@@ -38,9 +39,10 @@ export CLAUDEFILES_GSTACK_REPO="file://$GB"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$h/bin/bun"; chmod +x "$h/bin/bun"; hash -r 2>/dev/null || true
 # seed non-interactive config so no prompt is needed
 mkdir -p "$h/.config/claudefiles"
+mkdir -p "$h/main" "$h/system"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
 { "flags": {"profile_super":true,"profile_gstack":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false,"linear":false,"kb":true},
-  "kb": {"vault_path": "SET-BELOW"},
+  "kb": {"vault_path": "SET-BELOW", "context": "work", "machine": "box"},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 # The vault has to live inside the fixture HOME, and a quoted heredoc expands nothing.
@@ -67,6 +69,10 @@ diff "$h/first-super-claudemd.md" "$h/.claude-super/CLAUDE.md" || { echo "FAIL s
 diff "$h/first-manifest.json" "$manifest"       || { echo "FAIL manifest not idempotent"; exit 1; }
 [ -d "$h/kb/projects" ] || { echo "FAIL kb vault not created"; exit 1; }
 [ -f "$h/kb/global/INDEX.md" ] || { echo "FAIL kb global index not created"; exit 1; }
+[ "$(readlink "$h/main/.claude/rules/context-index.md")" = "$h/kb/contexts/work/INDEX.md" ] \
+  || { echo "FAIL context symlink not wired by setup.sh"; exit 1; }
+[ "$(readlink "$h/system/.claude/rules/machine-index.md")" = "$h/kb/machine/box/INDEX.md" ] \
+  || { echo "FAIL machine symlink not wired by setup.sh"; exit 1; }
 for p in vanilla super g; do
   d="$h/.claude"; [ "$p" = vanilla ] || d="$h/.claude-$p"
   python3 -c 'import json,sys
@@ -119,10 +125,10 @@ printf 'CREDS' > "$h/.claude/.credentials.json"; printf 'HIST' > "$h/.claude/his
 mkdir -p "$h/.claude/projects/keepme"
 : > "$CLAUDE_FAKE_LOG"; : > "$PACLOG"
 # answers: confirm word, super y, dotnet y, codex_review y, codex_plugin n, playwright y,
-# azure n, ado n, gstack y, context7 y, context7 key (empty), linear n, kb y, vault path.
-# The order MUST track config_ensure_all; kb is asked last, so it sits last here too. Trailing
-# blanks absorb any dep prompt that a non-provisioned box might raise AFTER the config phase.
-printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\ny\n%s\n\n\n\n' "$h/kb" | \
+# azure n, ado n, gstack y, context7 y, context7 key (empty), linear n, kb y, vault path,
+# kb.context, kb.machine. The order MUST track config_ensure_all. Trailing blanks absorb any
+# dep prompt that a non-provisioned box might raise AFTER the config phase.
+printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\ny\n%s\nwork\nbox\n\n\n\n' "$h/kb" | \
   CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 CLAUDEFILES_CLEAN_SKIP_NET=1 bash "$cf/setup.sh"
 
 [ -e "$h/.claude/skills/ges-esp" ] && { echo "FAIL clean kept a stray skill"; exit 1; }
