@@ -208,24 +208,28 @@ kb_workspace_apply() { # kb_workspace_apply <enabled:true|false> — once per ru
     _kb_in_container || _kb_workspace_remove "$HOME/system" machine-index.md "$vault/machine"
     return 0
   fi
-  if ! ctx="$( (kb_context_name) 2>/dev/null )"; then
-    warn "kb workspace: kb.context is invalid — skipped"; return 0
-  fi
-  if [ -n "$ctx" ]; then
-    _kb_workspace_wire "$HOME/main" "$vault/contexts/$ctx/INDEX.md" context-index.md \
-      "*/contexts/*/INDEX.md" "Контекст $ctx"
+  # Each layer's config error is independent: an invalid kb.context must not freeze the machine
+  # layer (and vice versa) — the two branches below run regardless of each other's outcome.
+  if ctx="$( (kb_context_name) 2>/dev/null )"; then
+    if [ -n "$ctx" ]; then
+      _kb_workspace_wire "$HOME/main" "$vault/contexts/$ctx/INDEX.md" context-index.md \
+        "*/contexts/*/INDEX.md" "Контекст $ctx"
+    else
+      _kb_workspace_remove "$HOME/main" context-index.md "$vault/contexts"
+    fi
   else
-    _kb_workspace_remove "$HOME/main" context-index.md "$vault/contexts"
+    warn "kb workspace: kb.context is invalid — context layer skipped"
   fi
   if ! _kb_in_container; then
-    if ! machine="$( (kb_machine_name) 2>/dev/null )"; then
-      warn "kb workspace: kb.machine is invalid — skipped"; return 0
-    fi
-    if [ -n "$machine" ]; then
-      _kb_workspace_wire "$HOME/system" "$vault/machine/$machine/INDEX.md" machine-index.md \
-        "*/machine/*/INDEX.md" "Машина $machine"
+    if machine="$( (kb_machine_name) 2>/dev/null )"; then
+      if [ -n "$machine" ]; then
+        _kb_workspace_wire "$HOME/system" "$vault/machine/$machine/INDEX.md" machine-index.md \
+          "*/machine/*/INDEX.md" "Машина $machine"
+      else
+        _kb_workspace_remove "$HOME/system" machine-index.md "$vault/machine"
+      fi
     else
-      _kb_workspace_remove "$HOME/system" machine-index.md "$vault/machine"
+      warn "kb workspace: kb.machine is invalid — machine layer skipped"
     fi
   fi
   return 0

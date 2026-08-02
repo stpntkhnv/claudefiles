@@ -344,6 +344,17 @@ kb_workspace_apply true
 _ws_container false
 chk "container disable keeps machine link" [ -L "$MCH_LINK" ]
 
+# an invalid kb.context must not freeze the machine layer: only the context branch is skipped
+config_set kb.context "stellium"; config_set kb.machine "box-pc"; kb_workspace_apply true
+config_set kb.context "Bad"
+config_set kb.machine "box2-pc"
+kb_workspace_apply true
+chk "machine layer unaffected by invalid context" \
+  [ "$(readlink "$MCH_LINK")" = "$hw/kb/machine/box2-pc/INDEX.md" ]
+chk "context link untouched by invalid context" \
+  [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/stellium/INDEX.md" ]
+config_set kb.context "stellium"; config_set kb.machine "box-pc"; kb_workspace_apply true
+
 # a missing umbrella folder is a warn-and-skip, never an mkdir — for both layers
 setup_fixture_home >/dev/null; hn="$HOME"
 export CLAUDEFILES_CONFIG_DIR="$hn/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
