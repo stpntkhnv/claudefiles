@@ -39,6 +39,19 @@ kb_vault_path() {
   printf '%s\n' "${raw%/}"
 }
 
+# Layer names become path components under the vault; anything but a plain lowercase name is a
+# typo or an attack, and both must die in the config phase, not surface inside a symlink.
+_kb_layer_name() { # <key>
+  local raw; raw="$(config_get "$1")"
+  case "$raw" in
+    none) return 0 ;;
+    ""|*[!a-z0-9-]*) die "$1 must be a lowercase name ([a-z0-9-]) or 'none' (got '$raw')" ;;
+    *) printf '%s\n' "$raw" ;;
+  esac
+}
+kb_context_name() { _kb_layer_name kb.context; }
+kb_machine_name() { _kb_layer_name kb.machine; }
+
 _KB_INDEX_SEED='# Global index
 
 One line per note: `- [[name]]: what it is about`. This file is loaded into every session, so keep

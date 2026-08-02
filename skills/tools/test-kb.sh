@@ -48,6 +48,24 @@ config_set kb.vault_path "/srv/kb"
 chk "container explicit vault ok" [ "$(_vault_in_container)" = "/srv/kb" ]
 config_set kb.vault_path ""
 
+# --- kb_context_name / kb_machine_name -------------------------------------
+config_set kb.context "digi3"
+chk "context name passes"        [ "$(kb_context_name)" = "digi3" ]
+config_set kb.context "none"
+chk "context none is empty"      [ -z "$(kb_context_name)" ]
+config_set kb.context "Digi3"
+chk "context uppercase dies"     dies kb_context_name
+config_set kb.context "st/х"
+chk "context slash dies"         dies kb_context_name
+config_set kb.context "../x"
+chk "context dot-dot dies"       dies kb_context_name
+config_set kb.context ""
+chk "context empty dies"         dies kb_context_name
+config_set kb.machine "tsikhanau-pc"
+chk "machine name passes"        [ "$(kb_machine_name)" = "tsikhanau-pc" ]
+config_set kb.machine "no ne"
+chk "machine space dies"         dies kb_machine_name
+
 # --- kb_settings.py --------------------------------------------------------
 setup_fixture_home >/dev/null; hs="$HOME"
 export CLAUDEFILES_CONFIG_DIR="$hs/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
