@@ -105,15 +105,15 @@ _kb_write_rule() { # <path> <vault>
   return 0
 }
 
-_kb_link_index() { # <link> <target>
-  local link="$1" tgt="$2" cur
+_kb_link() { # <link> <target> <owned-shape-glob>
+  local link="$1" tgt="$2" shape="$3" cur
   if [ -L "$link" ]; then
     cur="$(readlink "$link")"
     [ "$cur" = "$tgt" ] && return 0
-    # Retarget only what looks like a kb index, i.e. our own link after kb.vault_path changed.
-    # A link the user pointed at something else lives in our namespace but is still theirs.
+    # Retarget only what looks like an index of this layer, i.e. our own link after the config
+    # changed. A link the user pointed at something else lives in our namespace but is theirs.
     case "$cur" in
-      */global/INDEX.md) ln -sfn "$tgt" "$link" ;;
+      $shape) ln -sfn "$tgt" "$link" || warn "kb: cannot retarget $link" ;;
       *) warn "kb: $link points at $cur, which is not a knowledge-base index — leaving it untouched" ;;
     esac
     return 0
@@ -121,9 +121,12 @@ _kb_link_index() { # <link> <target>
   if [ -e "$link" ]; then
     warn "kb: $link exists and is not a symlink — leaving it untouched"; return 0
   fi
-  ln -s "$tgt" "$link"
+  # setup.sh runs under set -e and kb_workspace_apply is called from its top level, so every
+  # mutation here must degrade to a warn instead of aborting the whole run.
+  ln -s "$tgt" "$link" || warn "kb: cannot create $link"
   return 0
 }
+_kb_link_index() { _kb_link "$1" "$2" "*/global/INDEX.md"; }
 
 _kb_remove_rules() { # <rules_dir> <index_target|"">
   local rules="$1" idx="$2"
@@ -152,6 +155,79 @@ _kb_rules_only() { # <rules_dir> — 0 if it holds nothing but the two files kb 
       *)           return 1 ;;
     esac
   done
+  return 0
+}
+
+_kb_layer_index_seed() { # <path> <title> — create the index a fresh symlink will point at
+  # -L too: a dangling symlink at the index path is still existing vault content, and writing
+  # through it would land the seed somewhere we were never asked to write.
+  { [ -e "$1" ] || [ -L "$1" ]; } && return 0
+  mkdir -p "$(dirname "$1")" || return 1
+  printf '# %s\n\nOne line per note: `- [[name]]: what it is about`. Keep it under 50 lines and leave\nthe detail in the notes themselves.\n' "$2" > "$1"
+}
+
+_kb_unlink() { # <link> <owned-prefix> — remove only a link into THIS vault's layer dir
+  local link="$1" prefix="$2" cur
+  [ -L "$link" ] || return 0
+  cur="$(readlink "$link")"
+  case "$cur" in
+    "$prefix"/*/INDEX.md) rm -f "$link" || warn "kb: cannot remove $link" ;;
+    */INDEX.md) warn "kb: $link points outside the configured vault — leaving it untouched" ;;
+  esac
+  return 0
+}
+
+_kb_workspace_wire() { # <root> <target> <linkname> <owned-shape-glob> <seed-title>
+  local root="$1" tgt="$2" name="$3" shape="$4" title="$5"
+  # No mkdir for the umbrella itself: a configured layer on a machine without its work tree is a
+  # sign of drift, not an order for an empty directory. The next run after mkdir wires it.
+  if [ ! -d "$root" ]; then
+    warn "kb workspace: $root does not exist — create it and re-run setup to wire this layer"
+    return 0
+  fi
+  _kb_layer_index_seed "$tgt" "$title" || { warn "kb workspace: cannot seed $tgt"; return 0; }
+  mkdir -p "$root/.claude/rules" || { warn "kb workspace: cannot create $root/.claude/rules"; return 0; }
+  _kb_link "$root/.claude/rules/$name" "$tgt" "$shape"
+  return 0
+}
+
+_kb_workspace_remove() { # <root> <linkname> <owned-prefix>
+  local rules="$1/.claude/rules"
+  _kb_unlink "$rules/$2" "$3"
+  rmdir "$rules" "$1/.claude" 2>/dev/null || true
+  return 0
+}
+
+kb_workspace_apply() { # kb_workspace_apply <enabled:true|false> — once per run, not per profile
+  local enabled="${1:-false}" vault ctx machine
+  if ! vault="$( (kb_vault_path) 2>/dev/null )"; then
+    warn "kb workspace: kb.vault_path is invalid — skipped"; return 0
+  fi
+  if [ "$enabled" != true ]; then
+    _kb_workspace_remove "$HOME/main" context-index.md "$vault/contexts"
+    _kb_in_container || _kb_workspace_remove "$HOME/system" machine-index.md "$vault/machine"
+    return 0
+  fi
+  if ! ctx="$( (kb_context_name) 2>/dev/null )"; then
+    warn "kb workspace: kb.context is invalid — skipped"; return 0
+  fi
+  if [ -n "$ctx" ]; then
+    _kb_workspace_wire "$HOME/main" "$vault/contexts/$ctx/INDEX.md" context-index.md \
+      "*/contexts/*/INDEX.md" "Контекст $ctx"
+  else
+    _kb_workspace_remove "$HOME/main" context-index.md "$vault/contexts"
+  fi
+  if ! _kb_in_container; then
+    if ! machine="$( (kb_machine_name) 2>/dev/null )"; then
+      warn "kb workspace: kb.machine is invalid — skipped"; return 0
+    fi
+    if [ -n "$machine" ]; then
+      _kb_workspace_wire "$HOME/system" "$vault/machine/$machine/INDEX.md" machine-index.md \
+        "*/machine/*/INDEX.md" "Машина $machine"
+    else
+      _kb_workspace_remove "$HOME/system" machine-index.md "$vault/machine"
+    fi
+  fi
   return 0
 }
 
