@@ -24,7 +24,7 @@ flowchart TD
     mcp["mcp.sh"]
     claudemd["claudemd.sh"]
     gstack["gstack.sh"]
-    kb["kb.sh (+ kb_settings.py: записи settings)"]
+    kb["kb.sh (+ kb_settings.py: записи settings; kb_workspace_apply: зонтичные симлинки contexts/machine)"]
   end
   subgraph cfg["Хранилище конфига"]
     config["config.sh"]
@@ -76,7 +76,7 @@ flowchart LR
 
 ## Прогон setup.sh
 
-Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:95-96). После verify и этого exit 1 — отдельная фаза `linear auth` (только при `flags.linear=true`): `mcp_linear_login` за раз на каждый выбранный профиль, в его собственном `CLAUDE_CONFIG_DIR`; она никогда не роняет прогон, только warn.
+Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:95-96). Между `provision_selected` и `verify` — `kb_workspace_apply` (setup.sh, один раз за прогон, не per-профиль: заводит зонтичные симлинки `contexts`/`machine` в рабочих папках пользователя, не зависящие от выбора профилей и от того, упал ли какой-то из них; собственный провал — `warn`, не exit). После verify и этого exit 1 — отдельная фаза `linear auth` (только при `flags.linear=true`): `mcp_linear_login` за раз на каждый выбранный профиль, в его собственном `CLAUDE_CONFIG_DIR`; она никогда не роняет прогон, только warn.
 
 ```mermaid
 sequenceDiagram
@@ -110,6 +110,7 @@ sequenceDiagram
       R-->>P: ok (+ creds симлинк, wrapper)
     end
   end
+  U->>U: kb_workspace_apply (once, зонтичные симлинки contexts/machine — не per-профиль)
   U->>U: verify (json.tool каждого settings.json)
   opt есть упавшие профили
     U-->>U: warn список + exit 1
