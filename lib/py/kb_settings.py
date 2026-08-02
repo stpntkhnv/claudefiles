@@ -57,7 +57,7 @@ if vault:
     env[ENV_KEY] = vault
     new_env = [ENV_KEY]
     p = pattern(vault)
-    for entry in (f"Read({p})", f"Edit({p})", f"Write({p})"):
+    for entry in (f"Read({p})", f"Edit({p})"):
         if entry in allow:
             # Already present. Claim it only if we are the ones who added it earlier, so a rule the
             # user wrote by hand is never removed when the feature is switched off.

@@ -55,12 +55,13 @@ assert s["env"]["CLAUDE_CODE_REMOTE_MEMORY_DIR"]==v, s["env"]
 assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost"
 assert s["theme"]=="auto", "unrelated key lost"
 p="~/Documents/Notes/kb/**"
-for e in (f"Read({p})", f"Edit({p})", f"Write({p})"):
+for e in (f"Read({p})", f"Edit({p})"):
     assert e in s["permissions"]["allow"], (e, s["permissions"]["allow"])
+assert not any(e.startswith("Write(") for e in s["permissions"]["allow"]), s["permissions"]["allow"]
 assert "Bash(ls:*)" in s["permissions"]["allow"], "user allow rule lost"
 assert s["permissions"]["deny"]==["Read(~/.ssh/**)"], "deny list touched"
 assert m["env"]==["CLAUDE_CODE_REMOTE_MEMORY_DIR"], m
-assert len(m["permissions_allow"])==3, m
+assert len(m["permissions_allow"])==2, m
 PY
 chk "settings write is idempotent" bash -c '
   cp "$1" "$1.run1"; python3 "$2" "$1" "$3" "$4"; cmp -s "$1.run1" "$1"' _ "$S" "$cf/lib/py/kb_settings.py" "$M" "$V"
@@ -84,6 +85,23 @@ assert s["env"]["MY_OWN_VAR"]=="keep", "user env var lost on disable"
 assert s["permissions"]["allow"]==["Bash(ls:*)"], s["permissions"]["allow"]
 PY
 chk "manifest removed on disable" [ ! -e "$M" ]
+
+# a manifest from the Write era drops the dead Write rule on the next run; user rules stay
+cat > "$S" <<'EOF'
+{ "permissions": {"allow": ["Read(~/Documents/Notes/kb/**)", "Edit(~/Documents/Notes/kb/**)", "Write(~/Documents/Notes/kb/**)", "Bash(ls:*)"]} }
+EOF
+printf '%s' '{"env":[],"env_prev":{},"permissions_allow":["Read(~/Documents/Notes/kb/**)","Edit(~/Documents/Notes/kb/**)","Write(~/Documents/Notes/kb/**)"]}' > "$M"
+chk "helper runs (write migration)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" "$V"
+chk "kb-settings-write-migrated" python3 - "$S" "$M" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1])); m=json.load(open(sys.argv[2]))
+allow=s["permissions"]["allow"]
+assert not any(e.startswith("Write(") for e in allow), allow
+assert "Read(~/Documents/Notes/kb/**)" in allow and "Edit(~/Documents/Notes/kb/**)" in allow, allow
+assert "Bash(ls:*)" in allow, "user rule lost"
+assert m["permissions_allow"]==["Read(~/Documents/Notes/kb/**)","Edit(~/Documents/Notes/kb/**)"], m
+PY
+chk "helper runs (write migration off)" python3 "$cf/lib/py/kb_settings.py" "$S" "$M" ""
 
 # a manifest that already existed with a loose mode is tightened, not left as it was
 printf '%s' '{}' > "$M"; chmod 644 "$M"
