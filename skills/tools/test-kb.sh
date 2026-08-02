@@ -10,6 +10,10 @@ dies() { ( "$@" ) >/dev/null 2>&1; [ "$?" -ne 0 ]; }
 source "$cf/skills/tools/lib/faketools.bash"
 source "$cf/lib/common.sh"; source "$cf/lib/config.sh"; source "$cf/lib/kb.sh"
 
+# The suite itself may run inside a distrobox container; pin the detection so every case below
+# is deterministic, and re-enable it per-case through the wrapper functions.
+export CLAUDEFILES_CONTAINER=0
+
 # --- kb_vault_path ---------------------------------------------------------
 setup_fixture_home >/dev/null; h="$HOME"
 export CLAUDEFILES_CONFIG_DIR="$h/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
@@ -36,6 +40,13 @@ chk "empty falls back to default" [ "$(kb_vault_path)" = "$h/Documents/Notes/kb"
 
 chk "manifest path per profile" \
   [ "$(_kb_manifest super)" = "$CLAUDEFILES_CONFIG_DIR/managed-kb.super.json" ]
+
+_vault_in_container() { CLAUDEFILES_CONTAINER=1 kb_vault_path; }
+config_set kb.vault_path ""
+chk "container empty vault dies"  dies _vault_in_container
+config_set kb.vault_path "/srv/kb"
+chk "container explicit vault ok" [ "$(_vault_in_container)" = "/srv/kb" ]
+config_set kb.vault_path ""
 
 # --- kb_settings.py --------------------------------------------------------
 setup_fixture_home >/dev/null; hs="$HOME"

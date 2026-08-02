@@ -7,10 +7,20 @@ _KB_DEFAULT_VAULT="Documents/Notes/kb"
 
 _kb_manifest() { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-kb.$1.json"; }
 
+_kb_in_container() {
+  case "${CLAUDEFILES_CONTAINER:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  [ -e /run/.containerenv ] || [ -e /run/host ]
+}
+
 # A relative path is not merely inconvenient: the CLI itself rejects a relative autoMemoryDirectory,
 # and a path with '..' would let a typo in secrets.json point the store at an unrelated tree.
 kb_vault_path() {
   local raw; raw="$(config_get kb.vault_path)"
+  # The $HOME default inside a container silently creates a SECOND vault in the container home,
+  # outside sync and mortal with it (2026-08-01). An explicit host path is the only sane answer.
+  if [ -z "$raw" ] && _kb_in_container; then
+    die "kb.vault_path is empty and this is a container — set the HOST vault path in $(config_path)"
+  fi
   [ -z "$raw" ] && raw="$HOME/$_KB_DEFAULT_VAULT"
   case "$raw" in
     "~")   raw="$HOME" ;;
