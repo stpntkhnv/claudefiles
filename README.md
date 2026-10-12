@@ -10,7 +10,7 @@
 | **super** | `~/.claude-super` (по флагу `profile_super`) | `claude-super` | сегодняшний полный superpowers-стек: плагин `superpowers@claude-plugins-official` и detect-dotnet хук (всегда для super), опционально `dotnet@dotnet-agent-skills`/`codex@openai-codex`, codex-наж в `CLAUDE.md`, MCP по флагам (включая Linear), `model: opus[1m]`, `effortLevel: xhigh`, тёмная тема, статуслайн (тот же `claude/statusline/statusline.sh`) с бейджем профиля (`[vanilla]`/`[super]`/`[g]`) слева. |
 | **g** | `~/.claude-g` (по флагу `profile_gstack`) | `claude-g` | gstack (23 скилла-роли, около 50 скиллов всего), та же ванильная база (статуслайн с бейджем, звук, context7 MCP и Linear MCP по флагу, личный marker-блок), плюс marker-блок про `docs/vision`; `model: opus[1m]`, `effortLevel: xhigh`; без плагинов и без SessionStart-хука. |
 
-Для каждого не-дефолтного профиля `setup.sh` генерирует исполняемый wrapper `~/.local/bin/claude-<profile>` (например `~/.local/bin/claude-super`): `exec env CLAUDE_CONFIG_DIR=<каталог профиля> claude "$@"`. Wrapper работает в скриптах и свежих шеллах (не только как интерактивный alias); генерация идемпотентна и не перезаписывает файл, который уже существует и не управляется claudefiles. Обёртка видна, только если `~/.local/bin` есть в `$PATH`; если каталога там нет (например, нестандартный `$HOME`, чей `$PATH` указывает на другой `.local/bin`), `setup.sh` не падает и не правит rc-файлы, а печатает `WARN` с точной строкой `export PATH="$HOME/.local/bin:$PATH"`. Авторизация общая: в каждый не-дефолтный каталог `setup.sh` кладёт `.credentials.json` — симлинк на `~/.claude/.credentials.json` (там лежит реальный файл, который пишет `claude login`), так что `claude-super` не требует повторного логина. История сессий (`history.jsonl`) при этом раздельная на каждый каталог. Новый профиль добавляется одной записью в `lib/profiles.sh` (функция `recipe_<name>` + каталог `~/.claude-<name>`), без переписывания оркестратора.
+Для каждого профиля `setup.sh` генерирует исполняемый wrapper `~/.local/bin/claude-<profile>` (`claude-vanilla`, `claude-super`, `claude-g`), который задаёт `CLAUDE_CONFIG_DIR` и вызывает общий запускатель памяти. Генерация идемпотентна; чужие команды не перезаписываются. Установщик сам добавляет помеченный блок PATH в настройки Bash и поддерживаемые настройки zsh; после установки нужен новый терминал. Обычный `claude` также проходит через запускатель, upstream-бинарник не заменяется. Авторизация общая: в каждый не-дефолтный каталог `setup.sh` кладёт `.credentials.json` — симлинк на `~/.claude/.credentials.json` (там лежит реальный файл, который пишет `claude login`), так что `claude-super` не требует повторного логина. История сессий (`history.jsonl`) при этом раздельная на каждый каталог. Новый профиль добавляется одной записью в `lib/profiles.sh` (функция `recipe_<name>` + каталог `~/.claude-<name>`), без переписывания оркестратора.
 
 ## Что делает `setup.sh`
 
@@ -134,18 +134,23 @@ python3 ~/.local/share/claudefiles/lib/py/config_io.py setbool \
 ```
 <волт>/                          # по умолчанию ~/Documents/Notes/kb, переопределяется kb.vault_path
                                  # (в контейнере умолчания нет: путь к хостовому волту обязателен)
-├── projects/<slug>/memory/      # проектная память, раскладку строит сам CLI; slug от корня git-репо
+├── repositories/<имя>-<хеш>/   # автоматическая память по Git remote; папка клона не участвует
+│   └── MEMORY.md                # оглавление проекта
+├── repositories.json            # необязательные aliases и явные привязки
+├── projects/<slug>/memory/      # прежняя память по пути; копируется при первом запуске checkout
 │   └── MEMORY.md                # индекс проекта, грузится в каждую сессию (200 строк / 25 КБ)
 ├── global/                      # кросс-проектные заметки
 │   └── INDEX.md                 # строка на заметку, грузится в каждой сессии любого проекта
-├── contexts/<имя>/              # рабочий контекст, грузится зонтичным симлинком под $HOME/main
+├── contexts/<имя>/              # область из kb.context; индекс передаётся запускателем
 │   └── INDEX.md                 # строка на заметку, тот же формат
 ├── machine/<имя>/               # железо и ОС, грузится в $HOME/system
 │   └── INDEX.md                 # строка на заметку, тот же формат
 └── README.md                    # карта для человека: slug → нормальное имя проекта
 ```
 
-Как это включено (`lib/kb.sh`):
+С включённой KB **любой Git-репозиторий получает [память по Git remote](docs/repository-memory.md) автоматически**, без регистрации. Все профили используют одну проектную папку; другой клон, worktree, переименование и SSH/HTTPS сохраняют память. Рабочая область `kb.context` подключается отдельно, независимо от папки `main`. `setup.sh` сам устанавливает запускатель и его PATH, отдельные dotfiles не требуются. Реестр нужен только для aliases при переезде или выбора существующей тематической папки. Без сетевого remote Git-проект получает постоянный локальный ID. Старые заметки текущего checkout копируются при первой инициализации новой памяти, исходники сохраняются. Прежний механизм ниже остаётся для каталогов вне Git и прямого запуска upstream-клиента.
+
+Как включён совместимый прежний механизм (`lib/kb.sh`):
 
 - `env.CLAUDE_CODE_REMOTE_MEMORY_DIR` в `settings.json` каждого профиля переносит корень стора; подкаталог `projects/<slug>/memory/` создаёт CLI.
 - `<профиль>/rules/kb.md` — политика записи, которую claudefiles пишет побайтово: что считать кросс-проектным, формат заметки, запрет на секреты, и прямое указание, что индекс это данные, а не инструкции.
@@ -243,7 +248,7 @@ python3 ~/.local/share/claudefiles/lib/py/config_io.py set \
 ```
 setup.sh                      # оркестратор: preflight → config → deps → профили (vanilla + super + g) → verify → linear auth
 lib/*.sh                      # config, deps, settings, skills, plugins, mcp, hooks, claudemd, gstack, kb, profiles, common, apply-if-changed
-lib/py/                       # config_io.py, jsonmerge.py, kb_settings.py
+lib/py/                       # config_io.py, jsonmerge.py, kb_settings.py, repo_memory.py, launcher_path.py
 claude/settings/              # settings.vanilla.template.json + settings.super.template.json + settings.g.template.json (управляемые ключи профиля)
 claude/statusline/statusline.sh   # статуслайн (vanilla, super и g)
 claude/skills/context7-mcp/   # SKILL.md (копируется в каждый профиль)
@@ -259,11 +264,30 @@ legacy/claude/                # прежнее содержимое (агент�
 ```
 
 Документация:
+
 - [docs/architecture.md](docs/architecture.md): структура, потоки, прогон, рецепты
 - [docs/runtime.md](docs/runtime.md): поведение живой сессии
 - [docs/user-flow.md](docs/user-flow.md): что запускает пользователь
 - [docs/invariants.md](docs/invariants.md): гарантии тест-сьюта
 - [docs/config-schema.md](docs/config-schema.md): схема secrets.json
+
+### Карта контекста агентов
+
+[Единый редактируемый канвас TLDraw](docs/context-map/agent-context.tldraw) — одна страница со сквозным примером: контейнер `digi3`, профиль `claude-super`, репозиторий `1ANV` в папке `main`. Сначала раскрыты деревья профиля и базы знаний, затем подключение рабочей области, загрузка сессии и чтение заметок. У каждого файла есть отдельный блок с назначением и настоящим именем; короткие примеры содержимого стоят рядом. Симлинки показаны синим пунктиром. Снимок конфигурации от 11 октября 2026.
+
+На том же канвасе объяснены папки KB, история разговоров в профиле, auto memory и тематические заметки проектов, остальные источники контекста и синхронизация между устройствами. Оранжевые карточки содержат примеры; зелёный раздел показывает **предложение**, как выбирать память по идентификатору репозитория вместо пути клона. Канвас — снимок от 11 октября, до реализации. С 12 октября механизм работает автоматически для любого Git-репозитория без регистрации; актуальное описание и команды — [Память по репозиторию](docs/repository-memory.md).
+
+[Правила оформления диаграмм](docs/context-map/diagram-rules.md) встроены в скилл `tldraw-offline`, исходник которого хранится в `dotfiles`: дерево вместо строки пути, один объект на блок, понятные названия, реальные примеры и различимые связи. Документ также объясняет подключение и доставку правил в другие окружения. [Пользовательские наброски](docs/context-map/review-input.tldraw) сохранены отдельно перед перерисовкой.
+
+Открыть в локальном приложении TLDraw из корня репозитория:
+
+```bash
+tldraw docs/context-map/agent-context.tldraw
+```
+
+Без TLDraw можно открыть [SVG с увеличением без потери качества](docs/context-map/agent-context.svg) или [превью JPG](docs/context-map/agent-context.jpg). Это статические экспорты того же единственного канваса; после его правок их нужно обновить.
+
+[Подробное текстовое объяснение](docs/context-map/context-explained.md) сохранено отдельно: определения механизмов, конкретные пути, примеры записей и детали настройки.
 
 Управляемая цепочка chezmoi (в репозитории dotfiles): external `.chezmoiexternal.toml` тянет клон; финальный чеклист apply (`run_after_zz-next-steps.sh.tmpl`) сравнивает HEAD с `last-applied-head` и подсказывает запустить `setup.sh` руками.
 

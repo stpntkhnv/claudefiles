@@ -73,17 +73,18 @@ generate_wrapper() { # <name> <target_dir>
   if [ -e "$w" ] && ! grep -qF "$_WRAPPER_MARKER" "$w" 2>/dev/null; then
     warn "$w exists and is not claudefiles-managed; leaving it untouched (P2b)"; return 0
   fi
-  printf '#!/usr/bin/env bash\n%s\nexec env CLAUDE_CONFIG_DIR=%q claude "$@"\n' "$_WRAPPER_MARKER" "$dir" > "$w"
+  local runtime="$HOME/.local/share/claudefiles-runtime/repo_memory.py"
+  printf '#!/usr/bin/env bash\n%s\nexec env CLAUDE_CONFIG_DIR=%q python3 %q launch "$@"\n' "$_WRAPPER_MARKER" "$dir" "$runtime" > "$w"
   chmod +x "$w"
   log "wrapper → $w"
-  # The wrapper is only reachable if its dir is on PATH. With a non-standard $HOME (e.g. a
-  # per-machine home whose PATH points at a different .local/bin) it silently won't be found —
-  # warn with the exact fix instead of leaving the user puzzled. Non-fatal; we don't edit rc files.
-  _dir_on_path "$bin" || warn "$bin is not on \$PATH — 'claude-$name' won't be found in a new shell. Add to your shell rc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+  # The installer activates PATH in new shells. Offer an immediate fix for this shell too,
+  # including a container HOME whose PATH still points at the host's .local/bin.
+  _dir_on_path "$bin" || warn "$bin is not on \$PATH in this shell. After setup, open a new terminal; for immediate use: export PATH=\"\$HOME/.local/bin:\$PATH\""
 }
 
 provision_selected() { # <repo_root> <profile...>; sets PROVISION_FAILED=(); runs each recipe in a subshell
   local root="$1"; shift
+  kb_launchers_apply "$root"
   PROVISION_FAILED=()
   if [ "${CLAUDEFILES_CLEAN_ACTIVE:-false}" = true ]; then
     log "clean install: wiping $*"     # phase B: the profile list is finally resolved here
@@ -96,7 +97,7 @@ provision_selected() { # <repo_root> <profile...>; sets PROVISION_FAILED=(); run
          if [ "${CLAUDEFILES_CLEAN_ACTIVE:-false}" = true ]; then clean_profile "$p" || exit 1; fi
          "recipe_$p" "$root" ); then
       ensure_credentials_symlink "$dir"
-      if [ "$p" != vanilla ]; then generate_wrapper "$p" "$dir"; fi
+      generate_wrapper "$p" "$dir"
     else
       warn "profile '$p' failed to provision"; PROVISION_FAILED+=("$p")
     fi

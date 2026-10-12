@@ -5,13 +5,17 @@ description: Use when the knowledge base needs a pass - duplicate notes, stale f
 
 # Curating the knowledge base
 
-The base is two areas of one vault. The path is in the `kb` rule of this profile
+The base has several areas in one vault. The path is in the `kb` rule of this profile
 (`rules/kb.md`); read it first, everything below is relative to that vault.
 
-- `projects/<slug>/memory/` — one folder per repository, written by auto memory.
+- `repositories/<name>-<hash>/` — automatic Git repository memory; no registration required.
+  `MEMORY.md` is its index; identity comes from the normalized remote, not the clone path.
+- `contexts/<context>/projects/<project>/` — curated project libraries, optionally selected as
+  repository memory by `repositories.json`; `INDEX.md` may link to `MEMORY.md`.
+- `projects/<slug>/memory/` — legacy path-based memory, copied on initial launch from that checkout.
 - `global/` — cross-project notes plus `global/INDEX.md`.
 
-Curate ONE area per run, the one the user asked about. Never both silently.
+Curate ONE area per run, the one the user asked about. Do not expand into other areas silently.
 
 The vault is the user's, and every change here is a deletion or a rewrite of something they may
 never have read. So this skill runs in two passes: first REPORT what you would change and why, then

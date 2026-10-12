@@ -5,6 +5,35 @@ _KB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _KB_PY="$_KB_DIR/py/kb_settings.py"
 _KB_DEFAULT_VAULT="Documents/Notes/kb"
 
+# A separate PATH entry leaves npm/native Claude installations and their updaters untouched.
+# Profile wrappers call this runtime directly; the shell PATH also routes plain `claude` here.
+kb_launchers_apply() { # <repo_root>
+  local root="$1" runtime="$HOME/.local/share/claudefiles-runtime"
+  local path
+  [ ! -L "$runtime" ] || { warn "kb: $runtime is a symlink; leaving it untouched"; return 1; }
+  for path in "$runtime/repo_memory.py" "$runtime/bin/claude" "$HOME/.local/bin/claudefiles-kb"; do
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      if [ -L "$path" ] || ! grep -q 'claudefiles-memory-' "$path"; then
+        warn "kb: $path is not a managed launcher; leaving it untouched"; return 1
+      fi
+    fi
+  done
+  mkdir -p "$runtime/bin" "$HOME/.local/bin"
+  cp "$root/lib/py/repo_memory.py" "$runtime/repo_memory.py"
+  cat > "$runtime/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+# claudefiles-memory-launcher
+exec python3 "$HOME/.local/share/claudefiles-runtime/repo_memory.py" launch "$@"
+EOF
+  cat > "$HOME/.local/bin/claudefiles-kb" <<'EOF'
+#!/usr/bin/env bash
+# claudefiles-memory-launcher
+exec python3 "$HOME/.local/share/claudefiles-runtime/repo_memory.py" "$@"
+EOF
+  chmod +x "$runtime/bin/claude" "$HOME/.local/bin/claudefiles-kb"
+  python3 "$root/lib/py/launcher_path.py"
+}
+
 _kb_manifest() { echo "${CLAUDEFILES_CONFIG_DIR:-$HOME/.config/claudefiles}/managed-kb.$1.json"; }
 
 # Overridable via CLAUDEFILES_CONTAINER=0|1 (the suite may itself run inside distrobox, so tests
@@ -66,11 +95,13 @@ it under 50 lines and leave the detail in the notes themselves.
 
 _KB_README_SEED='# Knowledge base
 
-Written by Claude Code and by hand. Two areas:
+Written by Claude Code and by hand:
 
-- `projects/<slug>/memory/` — auto memory, one folder per repository. The slug comes from the PATH
-  of the repository root, so a repository that moves gets a new folder; rename the old one to keep
-  its memory.
+- `repositories/<name>-<hash>/` — automatic Git repository memory, independent of clone paths.
+- `repositories.json` — optional remote aliases and explicit memory/context overrides.
+- `contexts/<context>/projects/<project>/` — curated notes and explicitly bound repository memory.
+  `MEMORY.md` is the index; `INDEX.md` may be a symlink to it.
+- `projects/<slug>/memory/` — legacy path-based memory; adopted on first launch from that checkout.
 - `global/` — cross-project notes, indexed by `global/INDEX.md`.
 
 | slug | project |
@@ -85,8 +116,14 @@ _kb_rule_text() { # <vault>
 $_KB_RULE_MARKER
 # Knowledge base
 
-Memory for the repository you are in is written by auto memory and lives under
-$v/projects/. Facts that are NOT about one repository (this machine, tooling, working
+Git repository memory is selected automatically by the launcher from the normalized origin
+address, independently of clone location and profile. Default: $v/repositories/<name>-<hash>/.
+No registration is needed. Optional repositories.json bindings can select an existing curated
+directory in contexts/<context>/projects/<project>/ or an alias for a relocated repository.
+MEMORY.md is the auto-memory index; INDEX.md may link to it. Git repositories without a network
+remote keep a persistent id in their shared Git metadata. Old path-based notes under $v/projects/
+are copied on the first launch from the original checkout; sources remain intact.
+Facts that are NOT about one repository (this machine, tooling, working
 habits, preferences) go to the shared area instead:
 
 - Write the note to $v/global/<short-kebab-name>.md in the auto-memory format: YAML

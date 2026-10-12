@@ -55,6 +55,18 @@ CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 cp "$h/.claude/settings.json" "$h/first.json"
 cp "$h/.claude-super/settings.json" "$h/first-super.json"
 cp "$h/.claude/CLAUDE.md" "$h/first-claudemd.md"
+cp "$h/.bashrc" "$h/first-bashrc"
+cp "$h/.profile" "$h/first-profile"
+# No dotfiles installation or registry is present. setup.sh itself must activate plain Claude.
+shim="$(bash --noprofile --norc -c '. "$HOME/.profile"; type -P claude')"
+[ "$shim" = "$h/.local/share/claudefiles-runtime/bin/claude" ] \
+  || { echo "FAIL setup did not activate the memory launcher"; exit 1; }
+mkdir -p "$h/arbitrary/sources"
+git -C "$h/arbitrary/sources" init -q
+git -C "$h/arbitrary/sources" remote add origin 'git@github.com:example/fresh-project.git'
+record="$(cd "$h/arbitrary/sources" && "$h/.local/bin/claudefiles-kb" resolve --vault "$h/kb")"
+python3 -c 'import json,sys;p=json.loads(sys.argv[1]);assert p["automatic"] and p["memory"].startswith("repositories/fresh-project-")' "$record"
+[ ! -e "$h/kb/repositories.json" ] || { echo "FAIL registration required for a new project"; exit 1; }
 cp "$h/.claude-super/CLAUDE.md" "$h/first-super-claudemd.md"
 manifest="$h/.config/claudefiles/managed-mcp.vanilla.json"; cp "$manifest" "$h/first-manifest.json"
 cp -a "$h/.claude-g" "$h/first-g"
@@ -62,6 +74,8 @@ g_head="$(git -C "$h/.claude-g/skills/gstack" rev-parse HEAD)"
 : > "$CLAUDE_FAKE_LOG"                       # capture only the SECOND run's claude calls
 : > "$PACLOG"                                # and only the SECOND run's pacman/sudo calls
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
+diff "$h/first-bashrc" "$h/.bashrc" || { echo "FAIL shell setup not idempotent"; exit 1; }
+diff "$h/first-profile" "$h/.profile" || { echo "FAIL login shell setup not idempotent"; exit 1; }
 diff "$h/first.json" "$h/.claude/settings.json" || { echo "FAIL settings not idempotent"; exit 1; }
 diff "$h/first-super.json" "$h/.claude-super/settings.json" || { echo "FAIL super settings not idempotent"; exit 1; }
 diff "$h/first-claudemd.md" "$h/.claude/CLAUDE.md" || { echo "FAIL CLAUDE.md not idempotent"; exit 1; }

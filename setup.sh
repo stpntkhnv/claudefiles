@@ -55,7 +55,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
   if [ "$(config_flag kb)" = true ]; then
     config_ensure_optional kb.vault_path "Knowledge base vault path (empty = ~/Documents/Notes/kb; in a container name the HOST vault explicitly)"
     kb_vault_path >/dev/null    # fail fast: a bad stored path must not surface inside a recipe
-    config_ensure kb.context "Work context wired to \$HOME/main ('none' = no context layer):"
+    config_ensure kb.context "Default work context for Claude launches ('none' = no context layer):"
     kb_context_name >/dev/null  # fail fast, same reason
     if ! _kb_in_container; then
       config_ensure kb.machine "Machine name wired to \$HOME/system ('none' = no machine layer):"

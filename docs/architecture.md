@@ -170,3 +170,7 @@ flowchart LR
 - Оркестрация (`setup.sh`, `profiles.sh`) знает фазы и рецепты; провижн каждого профиля идёт в субшелле с экспортом `CLAUDEFILES_TARGET` и `CLAUDE_CONFIG_DIR` (profiles.sh:92).
 - Модули-appliers идемпотентны и владеют своим артефактом; `jsonmerge.py`: только логика мёрджа settings, `config_io.py`: только хранилище секретов.
 - Все стора секретов пишутся с `chmod 600` (`config_io.py:42-44`, `mcp.sh:26`).
+
+## Память по идентичности репозитория
+
+`kb_launchers_apply` устанавливает общий `repo_memory.py`, shim настоящего клиента и блок PATH в настройках оболочки, не заменяя npm/native-установку и не требуя dotfiles. `generate_wrapper` направляет `vanilla`, `super`, `g` в запускатель. Любой Git remote автоматически выбирает `repositories/<имя>-<хеш>/`; необязательный `<KB>/repositories.json` задаёт aliases и явные привязки. Без сетевого remote используется постоянный ID в Git metadata. `autoMemoryDirectory` передаётся настройками сессии; индекс области подключается независимо от зонтичной папки. Прежняя память checkout копируется при первой инициализации. `CLAUDE_CODE_REMOTE_MEMORY_DIR` остаётся для каталогов вне Git и прямого upstream-запуска. [Подробности и миграция](repository-memory.md).
