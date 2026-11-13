@@ -64,6 +64,11 @@ cp "$h/.profile" "$h/first-profile"
 shim="$(bash --noprofile --norc -c '. "$HOME/.profile"; type -P claude')"
 [ "$shim" = "$h/.local/share/claudefiles-runtime/bin/claude" ] \
   || { echo "FAIL setup did not activate the memory launcher"; exit 1; }
+for f in kb_homes.py kb_vault.py kb_history.py kb_tasks.py kb_apply.py kb_review.py kb-curate.md; do
+  [ -f "$h/.local/share/claudefiles-runtime/$f" ] || { echo "FAIL runtime misses $f"; exit 1; }
+done
+grep -q 'Automatic run' "$h/.local/share/claudefiles-runtime/kb-curate.md" \
+  || { echo "FAIL runtime carries an old kb-curate text"; exit 1; }
 mkdir -p "$h/arbitrary/sources"
 git -C "$h/arbitrary/sources" init -q
 git -C "$h/arbitrary/sources" remote add origin 'git@github.com:example/fresh-project.git'

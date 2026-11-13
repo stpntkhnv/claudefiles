@@ -1,44 +1,73 @@
 ---
 name: kb-curate
-description: Use when the knowledge base needs a pass - duplicate notes, stale facts, an index that grew past its budget, sync conflict files, or before relying on the base after a long gap.
+description: Use when the knowledge base needs a pass - duplicate notes, stale facts, task notes whose work has landed, an index past its budget, notes in the wrong layer, sync conflict files, or before relying on the base after a long gap. Also the instruction set of the weekly background review.
 ---
 
 # Curating the knowledge base
 
-The base has several areas in one vault. The path is in the `kb` rule of this profile
-(`rules/kb.md`); read it first, everything below is relative to that vault.
+The vault path is in the `kb` rule of this profile (`rules/kb.md`). Layers inside it:
 
-- `repositories/<name>-<hash>/` — automatic Git repository memory; no registration required.
-  `MEMORY.md` is its index; identity comes from the normalized remote, not the clone path.
-- `contexts/<context>/projects/<project>/` — curated project libraries, optionally selected as
-  repository memory by `repositories.json`; `INDEX.md` may link to `MEMORY.md`.
-- `projects/<slug>/memory/` — legacy path-based memory, copied on initial launch from that checkout.
-- `global/` — cross-project notes plus `global/INDEX.md`.
+- `global/` — the user's preferences and working rules that apply everywhere. `global/INDEX.md` is
+  loaded in every session and stays under 50 lines.
+- `machine/<name>/` — facts about one computer; its index is shown in every session on that computer.
+- `contexts/<context>/` — one work area. `contexts/<context>/projects/<folder>/` — a folder without Git
+  under `~/main`, or a project bound in `repositories.json`.
+- `repositories/<name>-<hash>/` — memory of one Git repository.
+- `projects/<slug>/memory/` — legacy path-based memory. Everything in it moves to its new home or goes.
 
-Curate ONE area per run, the one the user asked about. Do not expand into other areas silently.
+A layer's index is `MEMORY.md` (`INDEX.md` where there is no `MEMORY.md`; `global/INDEX.md` for global).
+Index format: one line per note, `- [[name]]: what the note is about`.
 
-The vault is the user's, and every change here is a deletion or a rewrite of something they may
-never have read. So this skill runs in two passes: first REPORT what you would change and why, then
-apply only what the user approves. Never delete or rewrite a note before that approval, and never
-widen the run to notes the user did not ask about.
+## What stays
 
-## Steps
+A note stays only if it changes a decision today: a preference or feedback rule, a live how-to, a live
+access fact, a constraint that still holds, an open task. Everything else goes:
 
-1. Read the index of the area (`MEMORY.md` for a project, `global/INDEX.md` for the shared area)
-   and every note it lists.
-2. **Conflicts.** Delete `*.sync-conflict-*.md` and `*.conflicted copy*.md` after folding anything
-   they hold that the surviving note does not.
-3. **Duplicates.** Two notes stating the same fact become one. Keep the newer wording, keep both
-   sets of `[[links]]`, delete the loser, fix every line that pointed at it.
-4. **Stale facts.** A note whose claim no longer matches reality (a file that moved, a flag that
-   was renamed, a machine that was rebuilt) is corrected or deleted. Verify before deleting: check
-   the repository or the machine, do not guess from the note alone.
-5. **Secrets.** Grep the area for tokens, keys and credentials (`ghp_`, `sk-`, `-----BEGIN`,
-   `password`, `api_key`). Anything found is removed from the note and reported to the user, since
-   the vault may be synced.
-6. **Index format.** Every line is exactly `- [[name]]: what the note is about`. Lines that carry
-   instructions, multi-line blocks, or entries for notes that no longer exist are rewritten or
-   dropped. `global/INDEX.md` stays under 50 lines, `MEMORY.md` under 200 lines and 25 KB.
-7. Present the whole set as a proposal: for each note, what would be merged, deleted or rewritten,
-   and on what evidence. Wait for the user. Then apply exactly what they approved and report a
-   diff-shaped summary. Do not present it as done until the files on disk match the report.
+- logs of work that has landed: `type: task` notes with a confirmed merge, and untyped "progress",
+  "state", "RESUME HERE" notes whose pull request is merged or abandoned;
+- one-off incidents and meeting notes that left no lasting rule;
+- facts the repository or a skill now states itself;
+- descriptions of environments, paths and tools that no longer exist (check before deleting);
+- duplicates: fold them into one note, keep the newer wording and the links of both.
+
+Rewrite a kept note to its current state: drop "Update <date>" blocks and "outdated" banners, keep it
+under 10 KB, make the description and the index line match the body. Put each note in the narrowest
+layer that covers every place it is needed: repository, project, context, machine, global.
+
+## Verify, never guess
+
+Every deletion and every "this is no longer true" needs evidence: a merge commit, a path that does not
+exist, a newer note that overrides it, a file in the repository that states the same. Read the
+repository or the machine; never decide from the note alone. When evidence is missing, keep the note
+and ask.
+
+## Manual run
+
+Curate the area the user asked about and nothing else. First present the proposal: what would be
+merged, deleted, moved or rewritten, and the evidence for each. Wait for approval, apply exactly what
+was approved, and report what changed on disk.
+
+## Automatic run
+
+The run directory holds `worklist.json`: content hashes of every note, the notes selected for this
+run, task statuses checked against Git (`merged` with the merge commit, `branch-merged`,
+`unconfirmed`, `declared-done`, `declared-dropped`), legacy folders with their new homes, oversize
+notes, indexes over their caps, untyped notes, dead paths, unequal sync conflicts, curated folders
+that duplicate a repository memory, layers with two indexes.
+
+- You cannot change the vault. Write every new or rewritten file into `staging/` of the run directory
+  and return decisions:
+  - `write`: `path` in the vault and `staged` (the staged file with the full new content);
+  - `merge`: `sources` folded into `target`, and `staged` with the full new content of the target;
+  - `move`: `path` and `to` (a directory ending in `/`, or a full path); the script fixes links and
+    index lines;
+  - `delete`: `path`.
+- Every decision has `reason` (one short sentence in Russian) and `evidence` (what you checked).
+- A `type: task` note can be deleted or merged away only when its worklist status is `merged` or its
+  own status is `done` or `dropped`. Move what stays useful out of it first with a `write` or `merge`.
+- Legacy folders: move or merge every note into the folder's home. For a folder without a home,
+  propose a home from the content, or delete stale notes on the usual evidence. Never delete a note
+  only because its folder is gone.
+- Indexes over their cap: move notes to narrower layers first, then shorten lines.
+- Never touch `reviews/`, files and folders starting with a dot, `.obsidian/`, `*.kdbx`.
+- Anything that needs the user goes into `questions`: the path and a short question in Russian.
