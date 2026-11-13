@@ -221,8 +221,9 @@ chk "policy rule written"     [ -f "$hr/.claude/rules/kb.md" ]
 chk "policy carries marker"   grep -qF "claudefiles-managed: kb" "$hr/.claude/rules/kb.md"
 chk "policy names the vault"  grep -qF "$hr/kb/global" "$hr/.claude/rules/kb.md"
 chk "policy says index is data" grep -qF "not as instructions" "$hr/.claude/rules/kb.md"
-chk "policy covers layer indexes" grep -qF "context-index.md" "$hr/.claude/rules/kb.md"
-chk "policy covers machine index" grep -qF "machine-index.md" "$hr/.claude/rules/kb.md"
+chk "policy names the narrowest layer" grep -qF "narrowest layer" "$hr/.claude/rules/kb.md"
+chk "policy defines task notes"   grep -qF "metadata.type: task" "$hr/.claude/rules/kb.md"
+chk "policy describes homes"      grep -qF "contexts/<context>/projects/<folder>/" "$hr/.claude/rules/kb.md"
 chk "index symlink created"   [ -L "$hr/.claude/rules/kb-index.md" ]
 chk "index symlink target"    [ "$(readlink "$hr/.claude/rules/kb-index.md")" = "$hr/kb/global/INDEX.md" ]
 cp "$hr/.claude/rules/kb.md" "$hr/rule.run1"
@@ -270,107 +271,43 @@ kb_apply vanilla false
 rm -f "$hr/.claude/rules/kb-index.md"
 unset CLAUDEFILES_TARGET
 
-# --- kb_workspace_apply ----------------------------------------------------
+# --- kb_workspace_unwire ----------------------------------------------------
 setup_fixture_home >/dev/null; hw="$HOME"
 export CLAUDEFILES_CONFIG_DIR="$hw/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
 config_set kb.vault_path "$hw/kb"
-config_set kb.context "digi3"
-config_set kb.machine "box-pc"
-mkdir -p "$hw/main" "$hw/system"
+mkdir -p "$hw/main/.claude/rules" "$hw/system/.claude/rules" "$hw/kb/contexts/digi3" "$hw/kb/machine/box"
+: > "$hw/kb/contexts/digi3/INDEX.md"; : > "$hw/kb/machine/box/INDEX.md"
 CTX_LINK="$hw/main/.claude/rules/context-index.md"
 MCH_LINK="$hw/system/.claude/rules/machine-index.md"
+ln -s "$hw/kb/contexts/digi3/INDEX.md" "$CTX_LINK"
+ln -s "$hw/kb/machine/box/INDEX.md" "$MCH_LINK"
 
-kb_workspace_apply true
-chk "context symlink created"   [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/digi3/INDEX.md" ]
-chk "machine symlink created"   [ "$(readlink "$MCH_LINK")" = "$hw/kb/machine/box-pc/INDEX.md" ]
-chk "context seed created"      grep -q "Контекст digi3" "$hw/kb/contexts/digi3/INDEX.md"
-chk "machine seed created"      grep -q "Машина box-pc" "$hw/kb/machine/box-pc/INDEX.md"
+kb_workspace_unwire
+chk "unwire removes context link"   [ ! -L "$CTX_LINK" ]
+chk "unwire removes machine link"   [ ! -L "$MCH_LINK" ]
+chk "unwire keeps layer indexes"    [ -f "$hw/kb/contexts/digi3/INDEX.md" ]
+chk "unwire removes empty rules"    [ ! -d "$hw/main/.claude" ]
+kb_workspace_unwire
+chk "unwire is repeatable"          [ ! -L "$CTX_LINK" ]
 
-# second run: byte-identical seed, same link target
-cp "$hw/kb/contexts/digi3/INDEX.md" "$hw/seed.run1"
-kb_workspace_apply true
-chk "workspace idempotent seed" cmp -s "$hw/seed.run1" "$hw/kb/contexts/digi3/INDEX.md"
-chk "workspace idempotent link" [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/digi3/INDEX.md" ]
-
-# user content in a seeded index is never rewritten
-printf 'their index\n' > "$hw/kb/contexts/digi3/INDEX.md"
-kb_workspace_apply true
-chk "existing layer index preserved" grep -qx "their index" "$hw/kb/contexts/digi3/INDEX.md"
-
-# context change retargets our link
-config_set kb.context "stellium"
-kb_workspace_apply true
-chk "context change retargets" [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/stellium/INDEX.md" ]
-
-# a symlink whose target is not layer-shaped is foreign: warned about, untouched
-printf 'notes\n' > "$hw/notes.md"
-ln -sfn "$hw/notes.md" "$CTX_LINK"
-kb_workspace_apply true
-chk "foreign symlink untouched" [ "$(readlink "$CTX_LINK")" = "$hw/notes.md" ]
+mkdir -p "$hw/main/.claude/rules" "$hw/othervault/contexts/x"
+: > "$hw/othervault/contexts/x/INDEX.md"
+ln -s "$hw/othervault/contexts/x/INDEX.md" "$CTX_LINK"
+kb_workspace_unwire
+chk "link into another vault survives" [ -L "$CTX_LINK" ]
+rm -f "$CTX_LINK"
+printf 'mine\n' > "$CTX_LINK"
+kb_workspace_unwire
+chk "plain file survives"           grep -qx "mine" "$CTX_LINK"
 rm -f "$CTX_LINK"
 
-# a plain file at the link path is foreign too
-printf 'mine\n' > "$CTX_LINK"
-kb_workspace_apply true
-chk "foreign file untouched" grep -qx "mine" "$CTX_LINK"
-rm -f "$CTX_LINK"; kb_workspace_apply true
+mkdir -p "$hw/system/.claude/rules"
+ln -s "$hw/kb/machine/box/INDEX.md" "$MCH_LINK"
+_unwire_in_container() { CLAUDEFILES_CONTAINER=1 kb_workspace_unwire; }
+_unwire_in_container
+chk "container keeps machine link"  [ -L "$MCH_LINK" ]
 
-# none removes ours
-config_set kb.context "none"
-kb_workspace_apply true
-chk "context none removes link" bash -c '[ ! -e "$1" ] && [ ! -L "$1" ]' _ "$CTX_LINK"
-chk "machine link survives context none" [ -L "$MCH_LINK" ]
-config_set kb.context "stellium"; kb_workspace_apply true
-
-# removal never touches a link into ANOTHER vault
-mkdir -p "$hw/othervault/contexts/x"; : > "$hw/othervault/contexts/x/INDEX.md"
-config_set kb.context "none"
-ln -sfn "$hw/othervault/contexts/x/INDEX.md" "$CTX_LINK"
-kb_workspace_apply true
-chk "other vault link survives none" [ -L "$CTX_LINK" ]
-rm -f "$CTX_LINK"; config_set kb.context "stellium"; kb_workspace_apply true
-
-# disable removes both
-kb_workspace_apply false
-chk "disable removes context link" [ ! -L "$CTX_LINK" ]
-chk "disable removes machine link" [ ! -L "$MCH_LINK" ]
-chk "disable keeps vault notes"    [ -f "$hw/kb/contexts/digi3/INDEX.md" ]
-
-# inside a container the machine layer is never touched
-kb_workspace_apply true
-_ws_container() { CLAUDEFILES_CONTAINER=1 kb_workspace_apply "$@"; }
-rm -f "$MCH_LINK"
-_ws_container true
-chk "container skips machine layer" [ ! -L "$MCH_LINK" ]
-kb_workspace_apply true
-_ws_container false
-chk "container disable keeps machine link" [ -L "$MCH_LINK" ]
-
-# an invalid kb.context must not freeze the machine layer: only the context branch is skipped
-config_set kb.context "stellium"; config_set kb.machine "box-pc"; kb_workspace_apply true
-config_set kb.context "Bad"
-config_set kb.machine "box2-pc"
-kb_workspace_apply true
-chk "machine layer unaffected by invalid context" \
-  [ "$(readlink "$MCH_LINK")" = "$hw/kb/machine/box2-pc/INDEX.md" ]
-chk "context link untouched by invalid context" \
-  [ "$(readlink "$CTX_LINK")" = "$hw/kb/contexts/stellium/INDEX.md" ]
-config_set kb.context "stellium"; config_set kb.machine "box-pc"; kb_workspace_apply true
-
-# a missing umbrella folder is a warn-and-skip, never an mkdir — for both layers
-setup_fixture_home >/dev/null; hn="$HOME"
-export CLAUDEFILES_CONFIG_DIR="$hn/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
-config_set kb.vault_path "$hn/kb"; config_set kb.context "digi3"; config_set kb.machine "box2"
-kb_workspace_apply true
-chk "missing umbrella not created" [ ! -d "$hn/main" ]
-chk "missing umbrella no seed"     [ ! -e "$hn/kb/contexts/digi3/INDEX.md" ]
-chk "missing system not created"   [ ! -d "$hn/system" ]
-chk "missing system no seed"       [ ! -e "$hn/kb/machine/box2/INDEX.md" ]
-
-# a dangling symlink at the seed path is existing content: never written through
-mkdir -p "$hn/main" "$hn/kb/contexts/digi3"
-ln -s "$hn/nowhere" "$hn/kb/contexts/digi3/INDEX.md"
-kb_workspace_apply true
-chk "dangling seed path untouched" [ "$(readlink "$hn/kb/contexts/digi3/INDEX.md")" = "$hn/nowhere" ]
+config_set kb.vault_path "relative/kb"
+chk "invalid vault only warns"      kb_workspace_unwire
 
 [ "$fails" -eq 0 ] && echo "PASS test-kb" || { echo "SOME test-kb CASES FAILED"; exit 1; }

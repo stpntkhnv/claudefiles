@@ -51,6 +51,9 @@ import json,sys
 p=sys.argv[1]; d=json.load(open(p)); d["kb"]["vault_path"]=sys.argv[2]
 json.dump(d, open(p,"w"), indent=2)
 PY
+mkdir -p "$h/main/.claude/rules" "$h/system/.claude/rules"
+ln -s "$h/kb/contexts/work/INDEX.md" "$h/main/.claude/rules/context-index.md"
+ln -s "$h/kb/machine/box/INDEX.md" "$h/system/.claude/rules/machine-index.md"
 CLAUDEFILES_ASSUME_TTY=0 bash "$cf/setup.sh" --non-interactive
 cp "$h/.claude/settings.json" "$h/first.json"
 cp "$h/.claude-super/settings.json" "$h/first-super.json"
@@ -83,10 +86,12 @@ diff "$h/first-super-claudemd.md" "$h/.claude-super/CLAUDE.md" || { echo "FAIL s
 diff "$h/first-manifest.json" "$manifest"       || { echo "FAIL manifest not idempotent"; exit 1; }
 [ -d "$h/kb/projects" ] || { echo "FAIL kb vault not created"; exit 1; }
 [ -f "$h/kb/global/INDEX.md" ] || { echo "FAIL kb global index not created"; exit 1; }
-[ "$(readlink "$h/main/.claude/rules/context-index.md")" = "$h/kb/contexts/work/INDEX.md" ] \
-  || { echo "FAIL context symlink not wired by setup.sh"; exit 1; }
-[ "$(readlink "$h/system/.claude/rules/machine-index.md")" = "$h/kb/machine/box/INDEX.md" ] \
-  || { echo "FAIL machine symlink not wired by setup.sh"; exit 1; }
+[ ! -L "$h/main/.claude/rules/context-index.md" ] || { echo "FAIL context umbrella link kept"; exit 1; }
+[ ! -L "$h/system/.claude/rules/machine-index.md" ] || { echo "FAIL machine umbrella link kept"; exit 1; }
+mkdir -p "$h/main/Scratch.Folder"
+home_json="$(cd "$h/main/Scratch.Folder" && "$h/.local/bin/claudefiles-kb" home)"
+python3 -c 'import json,sys;d=json.loads(sys.argv[1]);assert d["memory"]=="contexts/work/projects/scratch-folder",d' "$home_json" \
+  || { echo "FAIL a folder without Git under main has no project home"; exit 1; }
 for p in vanilla super g; do
   d="$h/.claude"; [ "$p" = vanilla ] || d="$h/.claude-$p"
   python3 -c 'import json,sys
