@@ -234,7 +234,7 @@ def validate(vault, ops, expected=None, tasks=None, table=None):
             entry['guard'][path] = (expected.get(path) if expected is not None
                                      else entry['base'].get(path, kv.file_hash(vault / path)))
         for path in entry['deps']:
-            entry['guard'][path] = kv.file_hash(vault / path)
+            entry['guard'][path] = entry['base'].get(path, kv.file_hash(vault / path))
         accepted.append(entry)
     return accepted, skipped
 
