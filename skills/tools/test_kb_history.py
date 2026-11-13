@@ -39,6 +39,37 @@ class HistoryTests(unittest.TestCase):
     def test_init_never_expires_unreachable_objects(self):
         self.assertEqual(self.h.out('config', 'gc.pruneExpire'), 'never')
 
+    def test_second_init_leaves_config_alone(self):
+        config = self.state / 'history.git/config'
+        before = (config.stat().st_ino, config.stat().st_mtime_ns, config.read_bytes())
+        kh.History(self.state, self.vault).init()
+        self.assertEqual((config.stat().st_ino, config.stat().st_mtime_ns, config.read_bytes()), before)
+        self.assertEqual(self.h.out('config', 'gc.pruneExpire'), 'never')
+
+    def test_exclusions_ignore_vault_gitignore(self):
+        (self.vault / '.gitignore').write_text('!personal.kdbx\n!*.kdbx\n!.obsidian/\n')
+        (self.vault / '.syncthing.a.md.tmp').write_text('partial')
+        self.h.snapshot('snapshot 1')
+        tracked = self.tracked()
+        for name in ('personal.kdbx', '.syncthing.a.md.tmp', '.obsidian/app.json'):
+            self.assertNotIn(name, tracked)
+        (self.vault / 'global/vault.kdbx').write_bytes(b'secret')
+        (self.vault / 'global/~syncthing~b.md.tmp').write_text('partial')
+        (self.vault / 'global/.syncthing.c.md.tmp').write_text('partial')
+        (self.vault / 'global/c.md').write_text('c\n')
+        self.h.commit_paths(['global', 'personal.kdbx'], 'review x')
+        tracked = self.tracked()
+        self.assertIn('global/c.md', tracked)
+        for name in ('personal.kdbx', 'global/vault.kdbx', 'global/~syncthing~b.md.tmp', 'global/.syncthing.c.md.tmp'):
+            self.assertNotIn(name, tracked)
+
+    def test_blobs_are_byte_exact_under_git_attributes(self):
+        (self.vault / '.gitattributes').write_text('*.md text eol=lf\n')
+        data = b'line one\r\nline two\r\n'
+        (self.vault / 'global/crlf.md').write_bytes(data)
+        self.assertEqual(self.h.read(self.h.store('global/crlf.md')), data)
+        self.assertEqual(self.h.current('global/crlf.md'), self.h.store_bytes(data))
+
     def test_blobs_roundtrip(self):
         oid = self.h.store('global/a.md')
         self.assertEqual(self.h.read(oid), b'one\n')

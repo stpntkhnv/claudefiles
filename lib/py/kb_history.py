@@ -1,8 +1,16 @@
+from fnmatch import fnmatchcase
 import os
 from pathlib import Path
 import subprocess
 
-EXCLUDE = ('.obsidian/', '*.kdbx', '.stfolder', '.stversions/', '.stignore', '.trash/', '*.lock')
+EXCLUDE = ('.obsidian/', '*.kdbx', '.stfolder', '.stversions/', '.stignore', '.trash/', '*.lock', '.syncthing.*',
+           '~syncthing~*')
+SKIP = tuple(f':(exclude,glob){pattern}' for name in EXCLUDE
+             for pattern in (f'**/{name.rstrip("/")}', f'**/{name.rstrip("/")}/**'))
+
+
+def excluded(rel):
+    return any(fnmatchcase(part, name.rstrip('/')) for part in Path(rel).parts for name in EXCLUDE)
 
 
 class History:
@@ -11,9 +19,9 @@ class History:
         self.vault = Path(vault).resolve()
         self.git_dir = self.state / 'history.git'
 
-    def git(self, *args, data=None, check=True):
-        result = subprocess.run(['git', '--literal-pathspecs', f'--git-dir={self.git_dir}',
-                                 f'--work-tree={self.vault}', *args],
+    def git(self, *args, data=None, check=True, magic=False):
+        mode = [] if magic else ['--literal-pathspecs']
+        result = subprocess.run(['git', *mode, f'--git-dir={self.git_dir}', f'--work-tree={self.vault}', *args],
                                 cwd=self.vault, input=data, capture_output=True)
         if check and result.returncode != 0:
             raise RuntimeError(f'git {args[0]}: ' + result.stderr.decode(errors='replace').strip())
@@ -30,7 +38,8 @@ class History:
             for key, value in (('core.bare', 'false'), ('user.name', 'claudefiles-kb'),
                                ('user.email', 'claudefiles-kb@localhost'), ('core.quotepath', 'false')):
                 self.git('config', key, value)
-        self.git('config', 'gc.pruneExpire', 'never')
+        if self.out('config', '--get', 'gc.pruneExpire', check=False) != 'never':
+            self.git('config', 'gc.pruneExpire', 'never')
         exclude = self.git_dir / 'info' / 'exclude'
         exclude.parent.mkdir(exist_ok=True)
         exclude.write_text('\n'.join(EXCLUDE) + '\n')
@@ -40,20 +49,20 @@ class History:
         return self.out('rev-parse', '-q', '--verify', 'HEAD', check=False) or None
 
     def snapshot(self, message):
-        self.git('add', '-A', '.')
+        self.git('add', '-A', '--', '.', *SKIP, magic=True)
         if self.head() and self.git('diff', '--cached', '--quiet', check=False).returncode == 0:
             return None
         self.git('commit', '-q', '--allow-empty', '--no-verify', '-m', message)
         return self.head()
 
     def store(self, rel):
-        return self.out('hash-object', '-w', '--', str(rel)) if (self.vault / rel).is_file() else None
+        return self.out('hash-object', '-w', '--no-filters', '--', str(rel)) if (self.vault / rel).is_file() else None
 
     def store_bytes(self, data):
         return self.out('hash-object', '-w', '--stdin', data=data)
 
     def current(self, rel):
-        return self.out('hash-object', '--', str(rel)) if (self.vault / rel).is_file() else None
+        return self.out('hash-object', '--no-filters', '--', str(rel)) if (self.vault / rel).is_file() else None
 
     def read(self, oid):
         return self.git('cat-file', 'blob', oid).stdout
@@ -63,11 +72,12 @@ class History:
         if not paths:
             return None
         tracked = set(self.out('ls-files', '--', *paths).splitlines())
-        present = [p for p in paths if (self.vault / p).exists() or p in tracked]
+        present = [p for p in paths if not excluded(p) and ((self.vault / p).exists() or p in tracked)]
         if not present:
             return None
-        self.git('add', '-A', '--', *present)
-        if self.git('diff', '--cached', '--quiet', '--', *present, check=False).returncode == 0:
+        spec = [':(literal)' + p for p in present] + list(SKIP)
+        self.git('add', '-A', '--', *spec, magic=True)
+        if self.git('diff', '--cached', '--quiet', '--', *spec, check=False, magic=True).returncode == 0:
             return None
-        self.git('commit', '-q', '--no-verify', '-m', message, '--', *present)
+        self.git('commit', '-q', '--no-verify', '-m', message, '--', *spec, magic=True)
         return self.head()
