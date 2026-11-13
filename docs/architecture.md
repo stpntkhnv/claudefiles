@@ -24,7 +24,7 @@ flowchart TD
     mcp["mcp.sh"]
     claudemd["claudemd.sh"]
     gstack["gstack.sh"]
-    kb["kb.sh (+ kb_settings.py: записи settings; kb_workspace_apply: зонтичные симлинки contexts/machine)"]
+    kb["kb.sh (+ kb_settings.py: записи settings; kb_workspace_unwire: снятие зонтичных симлинков; kb_reviewer_apply: таймеры ревизии)"]
   end
   subgraph cfg["Хранилище конфига"]
     config["config.sh"]
@@ -76,7 +76,7 @@ flowchart LR
 
 ## Прогон setup.sh
 
-Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:95-96). Между `provision_selected` и `verify` — `kb_workspace_apply` (setup.sh, один раз за прогон, не per-профиль: заводит зонтичные симлинки `contexts`/`machine` в рабочих папках пользователя, не зависящие от выбора профилей и от того, упал ли какой-то из них; собственный провал — `warn`, не exit). После verify и этого exit 1 — отдельная фаза `linear auth` (только при `flags.linear=true`): `mcp_linear_login` за раз на каждый выбранный профиль, в его собственном `CLAUDE_CONFIG_DIR`; она никогда не роняет прогон, только warn.
+Один деплой сверху вниз. По фичам deps не фатальны (warn и продолжает). Отсутствие `claude` на preflight тоже только warn, но провижн затем упадёт: `mcp_apply` зовёт `claude` CLI без guard (mcp.sh:23), профиль уходит в fail. Фатально также: нет `git`/`python3` (`require_cmd`), нет обязательного конфига без TTY (config.sh:30); exit 1 при упавших профилях (setup.sh:95-96). Между `provision_selected` и `verify` идут `kb_workspace_unwire` (снимает зонтичные симлинки прежних версий) и `kb_reviewer_apply` (таймеры ревизии только при `kb.reviewer=true` вне контейнера); оба один раз за прогон, их провал даёт `warn`, а не exit. После verify и этого exit 1 — отдельная фаза `linear auth` (только при `flags.linear=true`): `mcp_linear_login` за раз на каждый выбранный профиль, в его собственном `CLAUDE_CONFIG_DIR`; она никогда не роняет прогон, только warn.
 
 ```mermaid
 sequenceDiagram
@@ -110,7 +110,7 @@ sequenceDiagram
       R-->>P: ok (+ creds симлинк, wrapper)
     end
   end
-  U->>U: kb_workspace_apply (once, зонтичные симлинки contexts/machine — не per-профиль)
+  U->>U: kb_workspace_unwire + kb_reviewer_apply (once, не per-профиль)
   U->>U: verify (json.tool каждого settings.json)
   opt есть упавшие профили
     U-->>U: warn список + exit 1
@@ -173,4 +173,4 @@ flowchart LR
 
 ## Память по идентичности репозитория
 
-`kb_launchers_apply` устанавливает общий `repo_memory.py`, shim настоящего клиента и блок PATH в настройках оболочки, не заменяя npm/native-установку и не требуя dotfiles. `generate_wrapper` направляет `vanilla`, `super`, `g` в запускатель. Любой Git remote автоматически выбирает `repositories/<имя>-<хеш>/`; необязательный `<KB>/repositories.json` задаёт aliases и явные привязки. Без сетевого remote используется постоянный ID в Git metadata. `autoMemoryDirectory` передаётся настройками сессии; индекс области подключается независимо от зонтичной папки. Прежняя память checkout копируется при первой инициализации. `CLAUDE_CODE_REMOTE_MEMORY_DIR` остаётся для каталогов вне Git и прямого upstream-запуска. [Подробности и миграция](repository-memory.md).
+`kb_launchers_apply` устанавливает общий `repo_memory.py`, shim настоящего клиента и блок PATH в настройках оболочки, не заменяя npm/native-установку и не требуя dotfiles. `generate_wrapper` направляет `vanilla`, `super`, `g` в запускатель. Любой Git remote автоматически выбирает `repositories/<имя>-<хеш>/`; необязательный `<KB>/repositories.json` задаёт aliases и явные привязки. Без сетевого remote используется постоянный ID в Git metadata. `autoMemoryDirectory` передаётся настройками сессии; индекс области подключается независимо от зонтичной папки. Прежняя память checkout копируется при первой инициализации. `CLAUDE_CODE_REMOTE_MEMORY_DIR` остаётся для каталогов вне Git и прямого upstream-запуска. [Подробности и миграция](repository-memory.md). Папки без Git получают дом через `kb_homes.py` (контекст, проект, машина). Ревизия: `kb_review.py` с модулями `kb_vault.py`, `kb_history.py`, `kb_tasks.py`, `kb_apply.py`; запуск таймером или `claudefiles-kb review`.

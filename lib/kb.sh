@@ -176,8 +176,8 @@ _kb_link() { # <link> <target> <owned-shape-glob>
   if [ -e "$link" ]; then
     warn "kb: $link exists and is not a symlink — leaving it untouched"; return 0
   fi
-  # setup.sh runs under set -e and kb_workspace_apply is called from its top level, so every
-  # mutation here must degrade to a warn instead of aborting the whole run.
+  # setup.sh runs under set -e, so every mutation here must degrade to a warn instead of
+  # aborting the whole run.
   ln -s "$tgt" "$link" || warn "kb: cannot create $link"
   return 0
 }
