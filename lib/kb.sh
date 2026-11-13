@@ -322,7 +322,8 @@ _kb_units_remove() {
 
 kb_reviewer_apply() {
   local enabled="${1:-false}" dir unit changed=false
-  if [ "$enabled" != true ] || _kb_in_container; then
+  _kb_in_container && return 0
+  if [ "$enabled" != true ]; then
     _kb_units_remove; return 0
   fi
   dir="$(_kb_unit_dir)"
@@ -332,7 +333,8 @@ kb_reviewer_apply() {
       warn "kb: $dir/$unit is not claudefiles-managed — leaving it untouched"; continue
     fi
     if ! cmp -s <(_kb_unit_text "$unit") "$dir/$unit"; then
-      _kb_unit_text "$unit" > "$dir/$unit"; changed=true
+      _kb_unit_text "$unit" > "$dir/$unit" || { warn "kb: cannot write $dir/$unit"; continue; }
+      changed=true
     fi
   done
   if ! _kb_systemd_ok; then

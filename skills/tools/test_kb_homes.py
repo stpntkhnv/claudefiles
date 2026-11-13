@@ -207,7 +207,7 @@ class Prompts(Base):
 
 
 class Launcher(Base):
-    def test_launch_routes_project_folder_and_home_command(self):
+    def launcher(self):
         runtime = self.home / '.local/share/claudefiles-runtime'
         runtime.mkdir(parents=True)
         for module in (ROOT / 'lib/py').glob('*.py'):
@@ -221,12 +221,31 @@ class Launcher(Base):
         config.mkdir(parents=True)
         (config / 'secrets.json').write_text(json.dumps({'flags': {'kb': True}, 'kb': {
             'vault_path': str(self.vault), 'context': 'stellium', 'machine': 'pc'}}))
-        folder = self.home / 'main/apro/notes'
-        folder.mkdir(parents=True)
         env = dict(os.environ, HOME=str(self.home), CLAUDEFILES_CONTAINER='0',
                    PATH=str(bin_dir) + os.pathsep + os.environ['PATH'])
         env.pop('CLAUDEFILES_CONFIG_DIR', None)
         env.pop('CLAUDE_CONFIG_DIR', None)
+        return runtime, env
+
+    def test_reminder_stays_out_of_headless_runs(self):
+        runtime, env = self.launcher()
+        self.write('reviews/20261101-000000.md', '---\nacknowledged: false\n---\n- [ ] `x`: q?\n')
+        folder = self.home / 'main/apro'
+        folder.mkdir()
+
+        def prompt(*args):
+            out = json.loads(subprocess.check_output(['python3', str(runtime / 'repo_memory.py'), 'launch', *args],
+                                                     cwd=folder, env=env, text=True))
+            return out[out.index('--append-system-prompt') + 1] if '--append-system-prompt' in out else ''
+
+        self.assertIn('Knowledge-base review', prompt('hi'))
+        self.assertNotIn('Knowledge-base review', prompt('-p', 'hi'))
+        self.assertNotIn('Knowledge-base review', prompt('--print', 'hi'))
+
+    def test_launch_routes_project_folder_and_home_command(self):
+        runtime, env = self.launcher()
+        folder = self.home / 'main/apro/notes'
+        folder.mkdir(parents=True)
         args = json.loads(subprocess.check_output(
             ['python3', str(runtime / 'repo_memory.py'), 'launch', '-p', 'hi'], cwd=folder, env=env, text=True))
         memory = json.loads(args[args.index('--settings') + 1])['autoMemoryDirectory']

@@ -341,5 +341,17 @@ rm -f "$U/claudefiles-kb-review.timer"
 _reviewer_in_container() { CLAUDEFILES_CONTAINER=1 kb_reviewer_apply true; }
 _reviewer_in_container
 chk "no units in a container" bash -c '! ls "$1"/claudefiles-kb-* >/dev/null 2>&1' _ "$U"
+kb_reviewer_apply true
+: > "$SL"
+_reviewer_off_in_container() { CLAUDEFILES_CONTAINER=1 kb_reviewer_apply false; }
+_reviewer_off_in_container
+_reviewer_in_container
+chk "container keeps host units" bash -c 'for u in claudefiles-kb-snapshot.service claudefiles-kb-snapshot.timer claudefiles-kb-review.service claudefiles-kb-review.timer; do grep -qF "Description=claudefiles knowledge-base" "$1/$u" || exit 1; done' _ "$U"
+chk "container never calls systemctl" [ ! -s "$SL" ]
+rm -f "$U"/claudefiles-kb-*
+chmod 555 "$U"
+_reviewer_under_set_e() { ( set -e; kb_reviewer_apply true >/dev/null 2>&1; echo survived ); }
+chk "unwritable unit only warns under set -e" [ "$(_reviewer_under_set_e)" = survived ]
+chmod 755 "$U"
 
 [ "$fails" -eq 0 ] && echo "PASS test-kb" || { echo "SOME test-kb CASES FAILED"; exit 1; }

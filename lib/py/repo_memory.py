@@ -320,7 +320,8 @@ def launch(args):
     home = kb_homes.home_for(vault, env, Path.cwd())
     if home:
         kb_homes.prepare_home(vault, home, Path.cwd())
-    prompt = '\n\n'.join(p for p in (kb_homes.layer_prompts(vault, env, home), kb_homes.review_reminder(vault)) if p)
+    reminder = '' if {'-p', '--print'} & set(args) else kb_homes.review_reminder(vault)
+    prompt = '\n\n'.join(p for p in (kb_homes.layer_prompts(vault, env, home), reminder) if p)
     os.execv(binary, [binary, *launch_args(args, home['directory'] if home else None, prompt)])
 
 
