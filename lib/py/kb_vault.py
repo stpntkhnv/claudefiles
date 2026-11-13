@@ -55,6 +55,8 @@ def target(vault, rel):
     rel = Path(rel)
     if rel.is_absolute() or not rel.parts or '..' in rel.parts:
         raise ValueError('path must stay inside the vault: ' + str(rel))
+    if protected(rel, script=True):
+        raise ValueError('path points into a protected area: ' + str(rel))
     base = Path(vault).resolve()
     path = base / rel
     real = path.resolve()

@@ -128,6 +128,18 @@ class VaultTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             kv.target(self.vault, 'global/link.md')
         self.assertEqual(kv.canonical(self.vault, 'global/missing.md'), 'global/missing.md')
+        with self.assertRaises(ValueError):
+            kv.write_file(self.vault, 'personal.kdbx', b'x')
+        with self.assertRaises(ValueError):
+            kv.remove_file(self.vault, 'personal.kdbx')
+        with self.assertRaises(ValueError):
+            kv.write_file(self.vault, '.obsidian/x.md', b'x')
+        with self.assertRaises(ValueError):
+            kv.remove_file(self.vault, '.obsidian/x.md')
+        kv.write_file(self.vault, 'reviews/1.md', b'x')
+        self.assertEqual((self.vault / 'reviews/1.md').read_bytes(), b'x')
+        kv.write_file(self.vault, 'repositories/r/.checkouts.json', b'{}')
+        self.assertEqual((self.vault / 'repositories/r/.checkouts.json').read_bytes(), b'{}')
 
     def test_reindex_creates_missing_index(self):
         self.note('machine/pc/sound.md', 'sound', 'sound card')
