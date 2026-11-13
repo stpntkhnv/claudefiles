@@ -135,7 +135,26 @@ def git_value(cwd, *args):
     return result.stdout.strip() if result.returncode == 0 else ''
 
 
-def resolve(vault, cwd):
+def local_memory_id(common, create):
+    marker = common / 'claudefiles-memory-id'
+    if not create:
+        local_id = marker.read_text().strip() if marker.is_file() else ''
+        if not local_id:
+            raise LookupError('repository has no local memory id yet')
+        return str(uuid.UUID(local_id))
+    with marker.open('a+') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.seek(0)
+        local_id = handle.read().strip()
+        if not local_id:
+            local_id = str(uuid.uuid4())
+            handle.write(local_id + '\n')
+            handle.flush()
+        uuid.UUID(local_id)
+    return local_id
+
+
+def resolve(vault, cwd, create=True):
     data = registry_read(vault)
     root = git_value(cwd, 'rev-parse', '--show-toplevel')
     if not root:
@@ -163,16 +182,7 @@ def resolve(vault, cwd):
         common = Path(git_value(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
         if not common.is_absolute():
             raise ValueError('cannot find the shared Git metadata directory')
-        with (common / 'claudefiles-memory-id').open('a+') as marker:
-            fcntl.flock(marker, fcntl.LOCK_EX)
-            marker.seek(0)
-            local_id = marker.read().strip()
-            if not local_id:
-                local_id = str(uuid.uuid4())
-                marker.write(local_id + '\n')
-                marker.flush()
-            uuid.UUID(local_id)  # Fail visibly on damaged metadata.
-        identity = 'local:' + local_id
+        identity = 'local:' + local_memory_id(common, create)
         label = 'local'
     else:
         label = re.sub(r'[^a-z0-9]+', '-', identity.rsplit('/', 1)[-1].lower()).strip('-')[:60] or 'repo'
@@ -470,7 +480,7 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, OSError, TypeError, KeyError) as error:
+    except (ValueError, LookupError, OSError, TypeError, KeyError) as error:
         # Do not include input JSON or remote URLs (they can contain credentials).
         message = str(error) if not isinstance(error, json.JSONDecodeError) else 'invalid JSON configuration'
         print('kb: ' + message, file=sys.stderr)
