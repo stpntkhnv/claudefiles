@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 
+import kb_vault as kv
 import repo_memory as rm
 
 INDEX_LINES = 200
@@ -174,3 +175,21 @@ def layer_prompts(vault, env, home):
         if index.is_file() and index.resolve() != own:
             prompts.append(index_prompt(label, name, index))
     return '\n\n'.join(prompts)
+
+
+def review_reminder(vault):
+    pending, unacknowledged, questions = [], 0, 0
+    for path in sorted((Path(vault) / kv.REPORTS).glob('*.md')):
+        text = path.read_text(errors='replace')
+        open_questions = sum(1 for line in text.splitlines() if line.lstrip().startswith('- [ ]'))
+        acknowledged = str(kv.frontmatter(text).get('acknowledged')).lower() == 'true'
+        questions += open_questions
+        unacknowledged += 0 if acknowledged else 1
+        if open_questions or not acknowledged:
+            pending.append(path)
+    if not pending:
+        return ''
+    return (f'Knowledge-base review: {unacknowledged} report(s) not acknowledged, {questions} open question(s). '
+            f'Oldest: {pending[0]}. In your first reply, tell the user this in one line. When the user has read a '
+            'report, set `acknowledged: true` in its frontmatter. When the user answers a question, tick its '
+            'checkbox and write the answer on the next line.')

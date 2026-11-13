@@ -1,19 +1,48 @@
+from datetime import datetime
+import fcntl
 import json
 import math
 import os
 from pathlib import Path
 import re
+import subprocess
+import time
 
 import kb_apply as ka
+import kb_history as kh
 import kb_homes
 import kb_tasks as kt
 import kb_vault as kv
 import repo_memory as rm
 
+TIMER = 'claudefiles-kb-review.timer'
 REPORT_KEEP = 12
 SLICES = 4
 WALK_DEPTH = 5
 WALK_SKIP = {'node_modules', 'bin', 'obj', 'dist', 'build', 'target', '__pycache__'}
+SCHEMA = {
+    'type': 'object', 'additionalProperties': False, 'required': ['operations', 'questions'],
+    'properties': {
+        'operations': {'type': 'array', 'items': {
+            'type': 'object', 'additionalProperties': False, 'required': ['op', 'reason', 'evidence'],
+            'properties': {
+                'op': {'type': 'string', 'enum': ['write', 'merge', 'move', 'delete']},
+                'path': {'type': 'string'}, 'to': {'type': 'string'}, 'target': {'type': 'string'},
+                'sources': {'type': 'array', 'items': {'type': 'string'}},
+                'staged': {'type': 'string'}, 'reason': {'type': 'string'}, 'evidence': {'type': 'string'}}}},
+        'questions': {'type': 'array', 'items': {
+            'type': 'object', 'additionalProperties': False, 'required': ['path', 'question'],
+            'properties': {'path': {'type': 'string'}, 'question': {'type': 'string'}}}}}}
+SECTIONS = (('task', 'Закрытые задачи', 'closed_tasks'), ('delete', 'Удалено', 'deleted'),
+            ('merge', 'Слито', 'merged'), ('move', 'Перенесено', 'moved'), ('write', 'Переписано', 'rewritten'))
+
+
+class Busy(Exception):
+    pass
+
+
+class ModelError(Exception):
+    pass
 
 
 def environments():
@@ -297,3 +326,235 @@ def build_worklist(vault, run, envs, mapping, conflicts, tasks, full, cursor):
         dead_paths={n: dead for n in selection if (dead := kv.dead_paths(vault, n, Path.home()))},
         conflicts=conflicts, curated=curated(vault), double_index=double_index(vault),
         next_cursor=(start + size) if not full and rest else 0)
+
+
+def state_dir():
+    return Path(os.environ.get('CLAUDEFILES_KB_STATE', str(Path.home() / '.local/state/claudefiles/kb')))
+
+
+def lock(state):
+    state.mkdir(parents=True, exist_ok=True)
+    handle = (state / 'review.lock').open('a')
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise Busy('another knowledge-base review is running')
+    return handle
+
+
+def rule(path):
+    path, home = str(path), str(Path.home())
+    if path.startswith(home + '/'):
+        return '~/' + path[len(home) + 1:] + '/**'
+    return '/' + path + '/**'
+
+
+def model_command(binary, vault, run_dir, envs, model):
+    staging = Path(run_dir) / 'staging'
+    settings = {'autoMemoryEnabled': False, 'permissions': {
+        'allow': [f'Write({rule(staging)})', f'Edit({rule(staging)})'],
+        'deny': ['Bash', 'WebFetch', 'WebSearch']}}
+    command = [binary, '-p', '--model', model, '--restricted', '--strict-mcp-config',
+               '--permission-mode', 'dontAsk', '--output-format', 'json', '--json-schema', json.dumps(SCHEMA),
+               '--no-session-persistence', '--settings', json.dumps(settings), '--add-dir', str(vault)]
+    for env in envs:
+        root = kb_homes.context_root(env)
+        if root and root.is_dir():
+            command += ['--add-dir', str(root)]
+    return command
+
+
+def parse_envelope(code, stdout, stderr):
+    try:
+        envelope = json.loads(stdout)
+    except json.JSONDecodeError:
+        raise ModelError(f'CLI exit {code}: ' + (stderr or stdout).strip()[:300])
+    if code != 0 or envelope.get('is_error'):
+        raise ModelError('CLI error: ' + str(envelope.get('result') or envelope.get('subtype') or code)[:300])
+    data = envelope.get('structured_output')
+    if not isinstance(data, dict) or not isinstance(data.get('operations'), list) \
+            or not isinstance(data.get('questions'), list):
+        raise ModelError('the model returned no structured decisions')
+    return data
+
+
+def skill_text():
+    here = Path(__file__).resolve().parent
+    for path in (here / 'kb-curate.md', here.parents[1] / 'claude/skills/kb-curate/SKILL.md'):
+        if path.is_file():
+            return kv.body(path.read_text())
+    raise ModelError('kb-curate instructions are not installed')
+
+
+def prompt_text(run_dir):
+    run_dir = Path(run_dir)
+    return (skill_text() + f'\n\n## This run\n\nRun directory: {run_dir}\nWorklist: {run_dir / "worklist.json"}\n'
+            f'Staging: {run_dir / "staging"}\nAutomatic mode: never ask in chat, put questions into the '
+            'questions list. Return the decisions as the structured output.')
+
+
+def model_pass(vault, run_dir, envs, prompt=None):
+    try:
+        binary = rm.real_claude()
+    except ValueError as error:
+        raise ModelError(str(error))
+    model = os.environ.get('CLAUDEFILES_KB_REVIEW_MODEL', 'opus')
+    timeout = int(os.environ.get('CLAUDEFILES_KB_REVIEW_TIMEOUT', '3600'))
+    command = model_command(binary, vault, run_dir, envs, model)
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(Path.home() / '.claude'))
+    try:
+        result = subprocess.run(command, cwd=run_dir, env=env, input=prompt or prompt_text(run_dir),
+                                capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise ModelError(f'the model pass timed out after {timeout} s')
+    return parse_envelope(result.returncode, result.stdout, result.stderr)
+
+
+def _item(record, run):
+    where = f'`{record["subject"]}`' + (f' → `{record["dest"]}`' if record.get('dest') else '')
+    evidence = f' Доказательство: {record["evidence"]}.' if record.get('evidence') else ''
+    return f'{record["id"]}. {where}: {record["reason"]}.{evidence} Откат: `claudefiles-kb undo {run} {record["id"]}`'
+
+
+def write_report(vault, run, status, error, records, skipped, questions, unresolved, tasks):
+    groups = {key: [] for key, _, _ in SECTIONS}
+    for record in records:
+        if record['origin'] != 'model':
+            continue
+        key = 'task' if record['kind'] == 'delete' and record['subject'] in tasks else record['kind']
+        groups.setdefault(key, []).append(record)
+    script = [r for r in records if r['origin'] == 'script']
+    lines = ['---', f'run: {run}', f'date: {datetime.now().date().isoformat()}', f'status: {status}']
+    lines += [f'{field}: {len(groups[key])}' for key, _, field in SECTIONS]
+    lines += [f'mechanical: {len(script)}', f'skipped: {len(skipped) + len(unresolved)}',
+              f'questions: {len(questions)}', 'acknowledged: false', '---', '', f'# Ревизия базы знаний {run}', '']
+    if error:
+        lines += [f'Прогон завершён со статусом {status}: {error}', '']
+    lines += ['## Вопросы', '']
+    lines += [f'- [ ] `{q["path"]}`: {q["question"]}' for q in questions] or ['Вопросов нет.']
+    for key, title, _ in SECTIONS:
+        lines += ['', f'## {title}', '']
+        lines += [_item(r, run) for r in groups[key]] or ['Нет.']
+    lines += ['', '## Механика', '']
+    lines += [_item(r, run) for r in script] or ['Нет.']
+    lines += ['', '## Пропущено', '']
+    lines += [f'- `{s["subject"]}` ({s["kind"]}): {s["problem"]}' for s in skipped]
+    lines += [f'- `{u["source"]}`: старая папка не разобрана, {u["reason"]}' for u in unresolved]
+    if not skipped and not unresolved:
+        lines.append('Нет.')
+    rel = f'{kv.REPORTS}/{run}.md'
+    kv.write_file(vault, rel, ('\n'.join(lines) + '\n').encode())
+    return rel
+
+
+def recover_all(history, vault, state):
+    for path in sorted((state / 'runs').glob('*/*journal.json')):
+        journal = ka.recover(history, vault, path)
+        if journal is None or path.name != 'journal.json' or (Path(vault) / kv.REPORTS / f'{journal.run}.md').exists():
+            continue
+        rel = write_report(vault, journal.run, 'failed', 'прогон был прерван, незавершённая операция откатана',
+                           journal.done(), [], [], [], {})
+        history.commit_paths([rel], f'review {journal.run} (recovered report)')
+
+
+def enable_timer():
+    unit = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'systemd/user' / TIMER
+    if not unit.is_file():
+        return 'the review timer unit is not installed; run setup.sh'
+    result = subprocess.run(['systemctl', '--user', 'enable', '--now', TIMER], capture_output=True, text=True)
+    return None if result.returncode == 0 else 'cannot enable the review timer: ' + result.stderr.strip()
+
+
+def review(vault, full=False):
+    vault = Path(vault)
+    state = state_dir()
+    try:
+        handle = lock(state)
+    except Busy as error:
+        print(f'kb review: {error}')
+        return 0
+    with handle:
+        history = kh.History(state, vault).init()
+        recover_all(history, vault, state)
+        run = datetime.now().strftime('%Y%m%d-%H%M%S')
+        run_dir = state / 'runs' / run
+        (run_dir / 'staging').mkdir(parents=True, exist_ok=True)
+        history.snapshot(f'snapshot {run}')
+        journal = ka.Journal(run_dir / 'journal.json', run)
+        journal.save()
+        cursor = rm.json_read(state / 'cursor.json', {}) or {}
+        status, error, work = 'ok', None, {}
+        skipped, questions, unresolved, tasks = [], [], [], {}
+        try:
+            envs = environments()
+            mapping, conflicts, _, missed = autofix(history, vault, journal, envs)
+            skipped += missed
+            unresolved = [e for e in mapping if not e['home']]
+            tasks = kt.task_notes(vault)
+            work = build_worklist(vault, run, envs, mapping, conflicts, tasks, full, cursor)
+            questions += work['questions']
+            rm.atomic_json(run_dir / 'worklist.json', work)
+            try:
+                decision = model_pass(vault, run_dir, envs)
+            except ModelError as failure:
+                status, error = 'partial', str(failure)
+            else:
+                ops, bad = ka.from_model(vault, run_dir, decision)
+                done, missed = ka.run_ops(history, vault, journal, ops, work['hashes'], tasks)
+                skipped += bad + missed
+                links, merged = ka.collect_links(done)
+                _, missed = ka.run_fixups(history, vault, journal, ka.layers_of(p for r in done for p in r['paths']),
+                              links, merged)
+                skipped += missed
+                questions += decision['questions']
+            _, missed = ka.run_ops(history, vault, journal, empty_dir_ops(vault))
+            skipped += missed
+        except Exception as failure:
+            status, error = 'failed', f'{type(failure).__name__}: {failure}'
+            try:
+                ka.settle(history, vault, journal)
+            except Exception as again:
+                error += f'; откат незавершённой операции не удался: {again}'
+        report = write_report(vault, run, status, error, journal.done(), skipped, questions, unresolved, tasks)
+        history.commit_paths(journal.paths() + [report], f'review {run}')
+        journal.close()
+        if status == 'ok':
+            rm.atomic_json(state / 'cursor.json', dict(cursor=work.get('next_cursor', 0), last_run=time.time()))
+            if full:
+                (state / 'initialized').write_text(run + '\n')
+                problem = enable_timer()
+                if problem:
+                    print('kb review: ' + problem)
+        print(f'kb review {run}: {status}; report {vault / report}')
+        return 1 if status == 'failed' else 0
+
+
+def snapshot(vault):
+    state = state_dir()
+    try:
+        handle = lock(state)
+    except Busy:
+        return 0
+    with handle:
+        history = kh.History(state, vault).init()
+        recover_all(history, vault, state)
+        history.snapshot('snapshot ' + datetime.now().strftime('%Y%m%d-%H%M%S'))
+    return 0
+
+
+def undo_run(vault, run, op_id=None):
+    state = state_dir()
+    journal = state / 'runs' / run / 'journal.json'
+    if not journal.is_file():
+        raise ValueError('no such review run: ' + run)
+    try:
+        handle = lock(state)
+    except Busy as error:
+        print(f'kb undo: {error}')
+        return 1
+    with handle:
+        results = ka.undo(kh.History(state, vault).init(), vault, journal, op_id)
+    for number, outcome in results:
+        print(f'{number}: {outcome}')
+    return 0 if all(outcome == 'undone' for _, outcome in results) else 1

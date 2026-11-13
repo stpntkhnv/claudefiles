@@ -320,7 +320,7 @@ def launch(args):
     home = kb_homes.home_for(vault, env, Path.cwd())
     if home:
         kb_homes.prepare_home(vault, home, Path.cwd())
-    prompt = kb_homes.layer_prompts(vault, env, home)
+    prompt = '\n\n'.join(p for p in (kb_homes.layer_prompts(vault, env, home), kb_homes.review_reminder(vault)) if p)
     os.execv(binary, [binary, *launch_args(args, home['directory'] if home else None, prompt)])
 
 
@@ -475,6 +475,19 @@ def main():
         home = kb_homes.home_for(configured_vault(config, container), env, cwd, create_local_id=False)
         print(json.dumps(home, ensure_ascii=False, indent=2))
         return
+    if len(sys.argv) > 1 and sys.argv[1] in ('snapshot', 'review', 'undo'):
+        import kb_review
+        config = json_read(config_dir() / 'secrets.json', {})
+        if config.get('kb', {}).get('reviewer') is not True:
+            raise ValueError('this machine is not the knowledge-base reviewer (kb.reviewer)')
+        vault = configured_vault(config, in_container())
+        if sys.argv[1] == 'snapshot':
+            sys.exit(kb_review.snapshot(vault))
+        if sys.argv[1] == 'review':
+            sys.exit(kb_review.review(vault, full='--full' in sys.argv[2:]))
+        if len(sys.argv) < 3:
+            raise ValueError('usage: claudefiles-kb undo <run> [<operation>]')
+        sys.exit(kb_review.undo_run(vault, sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else None))
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     for command in ('resolve', 'register', 'migrate'):
