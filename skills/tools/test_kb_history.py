@@ -36,6 +36,9 @@ class HistoryTests(unittest.TestCase):
         kh.History(self.state, self.vault).init()
         self.assertEqual(self.tracked(), {'global/a.md'})
 
+    def test_init_never_expires_unreachable_objects(self):
+        self.assertEqual(self.h.out('config', 'gc.pruneExpire'), 'never')
+
     def test_blobs_roundtrip(self):
         oid = self.h.store('global/a.md')
         self.assertEqual(self.h.read(oid), b'one\n')

@@ -15,12 +15,12 @@ class Stale(Exception):
 
 
 def op(kind, origin, writes=None, removes=None, reason='', evidence='', subject=None, dest=None, dirs=None,
-       links=None, merged=None, deps=None):
+       links=None, merged=None, deps=None, base=None):
     writes = dict(writes or {})
     removes = list(removes or [])
     return dict(kind=kind, origin=origin, writes=writes, removes=removes, dirs=list(dirs or []),
                 reason=reason, evidence=evidence, dest=dest, links=dict(links or {}), merged=list(merged or []),
-                deps=list(deps or []), guard={},
+                deps=list(deps or []), guard={}, base=dict(base or {}),
                 subject=subject or (removes[0] if removes else next(iter(writes), '')))
 
 
@@ -186,6 +186,9 @@ def _problem(vault, entry, expected, tasks, counts, canon):
             return 'путь участвует в нескольких операциях: ' + path
         if expected is not None and kv.file_hash(vault / path) != expected.get(path):
             return 'изменён во время прогона: ' + path
+    for path in sorted(entry['deps']):
+        if counts[canon[path]]:
+            return 'путь участвует в нескольких операциях: ' + path
     if entry['kind'] == 'move' and (vault / entry['dest']).exists():
         return 'путь назначения уже существует: ' + entry['dest']
     if entry['origin'] == 'model':
@@ -228,7 +231,8 @@ def validate(vault, ops, expected=None, tasks=None, table=None):
                                 reason=entry['reason'], evidence=entry['evidence'], problem=problem))
             continue
         for path in touched(entry):
-            entry['guard'][path] = expected.get(path) if expected is not None else kv.file_hash(vault / path)
+            entry['guard'][path] = (expected.get(path) if expected is not None
+                                     else entry['base'].get(path, kv.file_hash(vault / path)))
         for path in entry['deps']:
             entry['guard'][path] = kv.file_hash(vault / path)
         accepted.append(entry)
@@ -307,6 +311,7 @@ def unindex_ops(vault, links, merged):
     for rel, olds in sorted(plans.items()):
         stems = {Path(old).stem for old in olds}
         directory = (vault / rel).parent
+        base_hash = kv.file_hash(vault / rel)
         original = kv.read(vault, rel)
         kept = []
         for line in original.splitlines():
@@ -318,7 +323,8 @@ def unindex_ops(vault, links, merged):
         text = '\n'.join(kept) + '\n'
         if text != original:
             ops.append(op('unindex', 'script', {rel: text.encode()}, [],
-                          'строки перенесённых и слитых заметок убраны из оглавления', ', '.join(sorted(olds))))
+                          'строки перенесённых и слитых заметок убраны из оглавления', ', '.join(sorted(olds)),
+                          base={rel: base_hash}))
     return ops
 
 
@@ -334,6 +340,7 @@ def relink_ops(vault, links):
     ops = []
     for rel in sorted(files):
         directory = (vault / rel).parent
+        base_hash = kv.file_hash(vault / rel)
         text = kv.read(vault, rel)
 
         def swap(match, directory=directory):
@@ -348,7 +355,7 @@ def relink_ops(vault, links):
         new = kv.rename_wiki(kv.MDLINK.sub(swap, text), renames)
         if new != text:
             ops.append(op('relink', 'script', {rel: new.encode()}, [], 'ссылки на перенесённые и слитые заметки',
-                          ', '.join(sorted(links))))
+                          ', '.join(sorted(links)), base={rel: base_hash}))
     return ops
 
 
@@ -357,11 +364,13 @@ def reindex_ops(vault, layers):
     table = kv.names(vault)
     ops = []
     for layer in sorted(set(layers)):
+        rel = kv.index_path(vault, layer).relative_to(vault).as_posix()
+        base_hash = kv.file_hash(vault / rel)
         text = kv.reindex(vault, layer, table)
         if text is None:
             continue
-        rel = kv.index_path(vault, layer).relative_to(vault).as_posix()
-        ops.append(op('reindex', 'script', {rel: text.encode()}, [], 'оглавление приведено к заметкам слоя', layer))
+        ops.append(op('reindex', 'script', {rel: text.encode()}, [], 'оглавление приведено к заметкам слоя', layer,
+                      base={rel: base_hash}))
     return ops
 
 
@@ -387,14 +396,18 @@ def run_fixups(history, vault, journal, layers, links=None, merged=None):
     journal.data['pending'] = dict(layers=sorted(set(layers)), links=links, merged=sorted(merged))
     journal.save()
     layers = set(layers) | layers_of(links) | layers_of(links.values())
-    records = []
+    records, skipped = [], []
     for build in (lambda: unindex_ops(vault, links, merged), lambda: relink_ops(vault, links),
                   lambda: reindex_ops(vault, layers)):
-        done, _ = run_ops(history, vault, journal, build())
-        records += done
+        for _ in range(3):
+            done, attempt = run_ops(history, vault, journal, build())
+            records += done
+            if not attempt:
+                break
+        skipped += attempt
     journal.data['pending'] = None
     journal.save()
-    return records
+    return records, skipped
 
 
 def restore(history, vault, record, side):
@@ -416,9 +429,13 @@ def settle(history, vault, journal):
         else:
             record['state'] = 'conflict'
     journal.save()
-    pending = journal.data.get('pending')
-    if pending:
-        run_fixups(history, vault, journal, pending['layers'], pending['links'], pending['merged'])
+    pending = journal.data.get('pending') or {}
+    links, merged = collect_links(journal.done())
+    links.update(pending.get('links') or {})
+    merged |= set(pending.get('merged') or ())
+    layers = layers_of(p for r in journal.done() for p in r['paths']) | set(pending.get('layers') or ())
+    if layers or links:
+        run_fixups(history, vault, journal, layers, links, merged)
 
 
 def recover(history, vault, journal_path):
@@ -441,13 +458,15 @@ def undo(history, vault, journal_path, op_id=None):
     log.save()
     results, links, layers = [], {}, set()
     for record in reversed(records):
+        base = {p: kv.file_hash(vault / p) for p in record['paths']}
         if any(history.current(p) != v['after'] for p, v in record['paths'].items()):
             results.append((record['id'], 'conflict'))
             continue
         writes = {p: history.read(v['before']) for p, v in record['paths'].items() if v['before']}
         removes = [p for p, v in record['paths'].items() if not v['before']]
+        entry_links = {new: old for old, new in record['links'].items()} if record['kind'] == 'move' else None
         entry = op('undo', 'script', writes, removes, f'откат операции {record["id"]}', record['subject'],
-                   subject=record['subject'])
+                   subject=record['subject'], base=base, links=entry_links)
         done, skipped = run_ops(history, vault, log, [entry])
         if not done:
             results.append((record['id'], 'conflict'))

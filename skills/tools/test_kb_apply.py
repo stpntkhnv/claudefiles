@@ -52,8 +52,10 @@ class ApplyTests(unittest.TestCase):
     def apply(self, ops, tasks=None):
         records, skipped = ka.run_ops(self.history, self.vault, self.journal, ops, self.expected(), tasks or {})
         links, merged = ka.collect_links(records)
-        records += ka.run_fixups(self.history, self.vault, self.journal,
-                                 ka.layers_of(p for r in records for p in r['paths']), links, merged)
+        fixed, fixup_skipped = ka.run_fixups(self.history, self.vault, self.journal,
+                                             ka.layers_of(p for r in records for p in r['paths']), links, merged)
+        records += fixed
+        skipped += fixup_skipped
         return records, skipped
 
     def test_write_move_and_undo_run(self):
@@ -299,6 +301,110 @@ class ApplyTests(unittest.TestCase):
         self.assertFalse(legacy.exists())
         ka.undo(self.history, self.vault, self.journal.path, records[0]['id'])
         self.assertEqual((legacy / '.checkouts.json').read_text(), '{}')
+
+    def test_dependency_on_a_concurrently_touched_path_is_refused(self):
+        self.write('global/a copy.md', 'dup\n')
+        expected = self.expected()
+        ops = [ka.op('dedupe', 'script', removes=['global/a copy.md'], deps=['global/a.md']),
+               ka.op('delete', 'script', removes=['global/a.md'])]
+        accepted, skipped = ka.validate(self.vault, ops, expected, {})
+        problems = {s['subject']: s['problem'] for s in skipped}
+        self.assertIn('нескольких', problems['global/a copy.md'])
+        self.assertEqual([entry['subject'] for entry in accepted], ['global/a.md'])
+
+    def test_relink_guards_against_an_edit_between_build_and_apply(self):
+        self.write('global/c.md', '---\nname: c\ndescription: c\n---\nsee [b](b.md)\n')
+        ops, _ = self.decide({'op': 'move', 'path': 'global/b.md', 'to': 'machine/pc/', 'reason': 'r',
+                              'evidence': 'e'})
+        ka.run_ops(self.history, self.vault, self.journal, ops, self.expected(), {})
+        fixups = ka.relink_ops(self.vault, {'global/b.md': 'machine/pc/b.md'})
+        c = self.vault / 'global/c.md'
+        c.write_text(c.read_text() + 'extra line\n')
+        records, skipped = ka.run_ops(self.history, self.vault, self.journal, fixups)
+        self.assertEqual(records, [])
+        self.assertIn('изменён во время прогона', skipped[0]['problem'])
+        self.assertIn('extra line', c.read_text())
+        self.assertIn('[b](b.md)', c.read_text())
+
+    def test_fixup_retry_absorbs_a_single_concurrent_edit(self):
+        self.write('global/c.md', '---\nname: c\ndescription: c\n---\nsee [b](b.md)\n')
+        ops, _ = self.decide({'op': 'move', 'path': 'global/b.md', 'to': 'machine/pc/', 'reason': 'r',
+                              'evidence': 'e'})
+        records, _ = ka.run_ops(self.history, self.vault, self.journal, ops, self.expected(), {})
+        links, merged = ka.collect_links(records)
+        original = ka.relink_ops
+        injected = []
+
+        def wrapped(vault, links):
+            result = original(vault, links)
+            if not injected:
+                injected.append(True)
+                c = self.vault / 'global/c.md'
+                c.write_text(c.read_text() + 'extra line\n')
+            return result
+
+        with mock.patch.object(ka, 'relink_ops', side_effect=wrapped):
+            fixed, skipped = ka.run_fixups(self.history, self.vault, self.journal,
+                                           ka.layers_of(p for r in records for p in r['paths']), links, merged)
+        self.assertEqual(skipped, [])
+        text = (self.vault / 'global/c.md').read_text()
+        self.assertIn('[b](../machine/pc/b.md)', text)
+        self.assertIn('extra line', text)
+
+    def test_fixup_retries_exhausted_leave_a_skip(self):
+        self.write('global/c.md', '---\nname: c\ndescription: c\n---\nsee [b](b.md)\n')
+        ops, _ = self.decide({'op': 'move', 'path': 'global/b.md', 'to': 'machine/pc/', 'reason': 'r',
+                              'evidence': 'e'})
+        records, _ = ka.run_ops(self.history, self.vault, self.journal, ops, self.expected(), {})
+        links, merged = ka.collect_links(records)
+        original = ka.relink_ops
+
+        def wrapped(vault, links):
+            result = original(vault, links)
+            c = self.vault / 'global/c.md'
+            c.write_text(c.read_text() + 'extra line\n')
+            return result
+
+        with mock.patch.object(ka, 'relink_ops', side_effect=wrapped):
+            fixed, skipped = ka.run_fixups(self.history, self.vault, self.journal,
+                                           ka.layers_of(p for r in records for p in r['paths']), links, merged)
+        self.assertTrue(skipped)
+
+    def test_settle_runs_fixups_for_operations_done_before_an_interruption(self):
+        self.write('global/c.md', '---\nname: c\ndescription: c\n---\nsee [b](b.md)\n')
+        ops, _ = self.decide(
+            {'op': 'move', 'path': 'global/b.md', 'to': 'machine/pc/', 'reason': 'r', 'evidence': 'e'},
+            {'op': 'write', 'path': 'global/a.md', 'staged': self.stage('a.md', 'new a\n'), 'reason': 'r',
+             'evidence': 'e'})
+        expected = self.expected()
+        original = kv.write_file
+
+        def fail_on_a(vault, rel, data):
+            if rel == 'global/a.md':
+                raise OSError('disk gone')
+            original(vault, rel, data)
+
+        with mock.patch.object(ka.kv, 'write_file', side_effect=fail_on_a):
+            with self.assertRaises(OSError):
+                ka.run_ops(self.history, self.vault, self.journal, ops, expected, {})
+        ka.recover(self.history, self.vault, self.journal.path)
+        self.assertIn('[b](../machine/pc/b.md)', (self.vault / 'global/c.md').read_text())
+        self.assertNotIn('[[b]]', (self.vault / 'global/INDEX.md').read_text())
+        self.assertIn('- [[b]]: note b', (self.vault / 'machine/pc/MEMORY.md').read_text())
+
+    def test_recovery_after_an_interrupted_undo_fixup_restores_links(self):
+        self.write('global/c.md', '---\nname: c\ndescription: c\n---\nsee [b](b.md)\n')
+        ops, _ = self.decide({'op': 'move', 'path': 'global/b.md', 'to': 'machine/pc/', 'reason': 'r',
+                              'evidence': 'e'})
+        records, _ = self.apply(ops)
+        move = next(r for r in records if r['kind'] == 'move')
+        self.assertIn('[b](../machine/pc/b.md)', (self.vault / 'global/c.md').read_text())
+        with mock.patch.object(ka, 'run_fixups', side_effect=OSError('killed')):
+            with self.assertRaises(OSError):
+                ka.undo(self.history, self.vault, self.journal.path, move['id'])
+        logs = sorted(self.run_dir.glob('undo-*.journal.json'))
+        ka.recover(self.history, self.vault, logs[-1])
+        self.assertIn('[b](b.md)', (self.vault / 'global/c.md').read_text())
 
 
 if __name__ == '__main__':

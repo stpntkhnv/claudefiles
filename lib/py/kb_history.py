@@ -30,6 +30,7 @@ class History:
             for key, value in (('core.bare', 'false'), ('user.name', 'claudefiles-kb'),
                                ('user.email', 'claudefiles-kb@localhost'), ('core.quotepath', 'false')):
                 self.git('config', key, value)
+        self.git('config', 'gc.pruneExpire', 'never')
         exclude = self.git_dir / 'info' / 'exclude'
         exclude.parent.mkdir(exist_ok=True)
         exclude.write_text('\n'.join(EXCLUDE) + '\n')
