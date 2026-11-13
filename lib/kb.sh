@@ -19,7 +19,7 @@ kb_launchers_apply() { # <repo_root>
     fi
   done
   mkdir -p "$runtime/bin" "$HOME/.local/bin"
-  cp "$root/lib/py/repo_memory.py" "$runtime/repo_memory.py"
+  cp "$root"/lib/py/*.py "$runtime/"
   cat > "$runtime/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 # claudefiles-memory-launcher

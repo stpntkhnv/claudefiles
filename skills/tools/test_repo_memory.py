@@ -225,7 +225,8 @@ class MemoryTests(unittest.TestCase):
         home = self.base / 'home'
         runtime = home / '.local/share/claudefiles-runtime'
         runtime.mkdir(parents=True)
-        shutil.copy2(MODULE, runtime / 'repo_memory.py')
+        for module in MODULE.parent.glob('*.py'):
+            shutil.copy2(module, runtime / module.name)
         shimdir = runtime / 'bin'
         shimdir.mkdir()
         shim = shimdir / 'claude'
