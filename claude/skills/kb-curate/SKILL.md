@@ -66,6 +66,9 @@ duplicate a repository memory, layers with two indexes.
 - Every decision has `reason` (one short sentence in Russian) and `evidence` (what you checked).
 - A `type: task` note can be deleted or merged away only when its worklist status is `merged` or its
   own status is `done` or `dropped`. Move what stays useful out of it first with a `write` or `merge`.
+- Never change the `status` or `link` of an open task note. When it looks finished, ask in `questions`.
+- Never copy secrets, tokens, credentials or file contents from repositories into `reason`,
+  `evidence`, `questions` or notes. Name the path instead.
 - Legacy folders: move or merge every note into the folder's home. For a folder without a home,
   propose a home from the content, or delete stale notes on the usual evidence. Never delete a note
   only because its folder is gone.
