@@ -310,7 +310,6 @@ chk "container keeps machine link"  [ -L "$MCH_LINK" ]
 config_set kb.vault_path "relative/kb"
 chk "invalid vault only warns"      kb_workspace_unwire
 
-# --- kb_reviewer_apply ------------------------------------------------------
 setup_fixture_home >/dev/null; hu="$HOME"
 export CLAUDEFILES_CONFIG_DIR="$hu/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
 config_set kb.vault_path "$hu/kb"
@@ -332,8 +331,10 @@ kb_reviewer_apply false
 chk "units removed when not reviewer" bash -c '! ls "$1"/claudefiles-kb-* >/dev/null 2>&1' _ "$U"
 chk "timers disabled" grep -qx -- "--user disable --now claudefiles-kb-review.timer" "$SL"
 printf '[Unit]\nDescription=mine\n' > "$U/claudefiles-kb-review.timer"
+: > "$SL"
 kb_reviewer_apply true
 chk "foreign unit untouched" grep -qx "Description=mine" "$U/claudefiles-kb-review.timer"
+chk "foreign unit not enabled" bash -c '! grep -q "enable --now claudefiles-kb-review.timer" "$1"' _ "$SL"
 kb_reviewer_apply false
 chk "foreign unit survives disable" grep -qx "Description=mine" "$U/claudefiles-kb-review.timer"
 rm -f "$U/claudefiles-kb-review.timer"

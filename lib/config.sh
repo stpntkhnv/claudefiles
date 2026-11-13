@@ -55,7 +55,7 @@ config_ensure_flag() { # <name> <prompt> — ask ONCE for a boolean, persist as 
   fi
 }
 
-config_ensure_bool() { # <key> <prompt>
+config_ensure_bool() {
   local key="$1" prompt="$2"
   config_has "$key" && return 0
   if _has_tty; then

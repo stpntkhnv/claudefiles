@@ -280,14 +280,23 @@ class FullRun(ReviewBase):
         self.assertIn('status: partial', self.report().read_text())
 
     def test_full_ok_run_enables_timer_but_partial_does_not(self):
-        unit = Path(os.environ['XDG_CONFIG_HOME']) / 'systemd/user' / kr.TIMER
-        unit.parent.mkdir(parents=True, exist_ok=True)
-        unit.write_text('[Timer]\n')
+        unit_dir = Path(os.environ['XDG_CONFIG_HOME']) / 'systemd/user'
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        (unit_dir / kr.TIMER).write_text(f'[Unit]\n{kr.UNIT_TAG}\n')
+        (unit_dir / kr.SERVICE).write_text(f'[Unit]\n{kr.UNIT_TAG}\n')
         self.decide([])
         self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
         self.assertEqual(self.systemd_log.read_text().strip(), f'--user enable --now {kr.TIMER}')
         self.systemd_log.unlink()
         self.decide([], envelope={'type': 'result', 'subtype': 'error_max_turns', 'is_error': True, 'result': 'limit'})
+        self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
+        self.assertFalse(self.systemd_log.exists())
+
+    def test_foreign_timer_is_not_enabled(self):
+        unit_dir = Path(os.environ['XDG_CONFIG_HOME']) / 'systemd/user'
+        unit_dir.mkdir(parents=True, exist_ok=True)
+        (unit_dir / kr.TIMER).write_text('[Unit]\nDescription=mine\n')
+        self.decide([])
         self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
         self.assertFalse(self.systemd_log.exists())
 

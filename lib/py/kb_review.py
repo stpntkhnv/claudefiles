@@ -16,6 +16,8 @@ import kb_vault as kv
 import repo_memory as rm
 
 TIMER = 'claudefiles-kb-review.timer'
+SERVICE = 'claudefiles-kb-review.service'
+UNIT_TAG = 'Description=claudefiles knowledge-base'
 REPORT_KEEP = 12
 SLICES = 4
 WALK_DEPTH = 5
@@ -487,10 +489,17 @@ def recover_all(history, vault, state):
         history.commit_paths([rel], f'review {journal.run} (recovered report)')
 
 
+def _unit_tagged(path):
+    return path.is_file() and UNIT_TAG in path.read_text()
+
+
 def enable_timer():
-    unit = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'systemd/user' / TIMER
-    if not unit.is_file():
+    unit_dir = Path(os.environ.get('XDG_CONFIG_HOME', str(Path.home() / '.config'))) / 'systemd/user'
+    timer, service = unit_dir / TIMER, unit_dir / SERVICE
+    if not timer.is_file():
         return 'the review timer unit is not installed; run setup.sh'
+    if not (_unit_tagged(timer) and _unit_tagged(service)):
+        return 'the review timer unit is not managed by claudefiles; leaving it alone'
     result = subprocess.run(['systemctl', '--user', 'enable', '--now', TIMER], capture_output=True, text=True)
     return None if result.returncode == 0 else 'cannot enable the review timer: ' + result.stderr.strip()
 

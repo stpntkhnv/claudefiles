@@ -287,8 +287,9 @@ _KB_UNITS="claudefiles-kb-snapshot.service claudefiles-kb-snapshot.timer claudef
 _kb_unit_dir() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; }
 _kb_state_dir() { echo "${CLAUDEFILES_KB_STATE:-$HOME/.local/state/claudefiles/kb}"; }
 _kb_systemd_ok() { command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; }
+_kb_unit_tagged() { [ -f "$1" ] && grep -qF "$_KB_UNIT_TAG" "$1"; }
 
-_kb_unit_text() { # <unit>
+_kb_unit_text() {
   case "$1" in
     claudefiles-kb-snapshot.service)
       printf '[Unit]\n%s snapshot\n\n[Service]\nType=oneshot\nExecStart=%%h/.local/bin/claudefiles-kb snapshot\n' "$_KB_UNIT_TAG" ;;
@@ -309,7 +310,7 @@ _kb_units_remove() {
     return 0
   fi
   for unit in $_KB_UNITS; do
-    [ -f "$dir/$unit" ] && grep -qF "$_KB_UNIT_TAG" "$dir/$unit" || continue
+    _kb_unit_tagged "$dir/$unit" || continue
     case "$unit" in
       *.timer) _kb_systemd_ok && { systemctl --user disable --now "$unit" >/dev/null 2>&1 || true; } ;;
     esac
@@ -319,7 +320,7 @@ _kb_units_remove() {
   return 0
 }
 
-kb_reviewer_apply() { # <enabled:true|false>
+kb_reviewer_apply() {
   local enabled="${1:-false}" dir unit changed=false
   if [ "$enabled" != true ] || _kb_in_container; then
     _kb_units_remove; return 0
@@ -327,7 +328,7 @@ kb_reviewer_apply() { # <enabled:true|false>
   dir="$(_kb_unit_dir)"
   mkdir -p "$dir" || { warn "kb: cannot create $dir"; return 0; }
   for unit in $_KB_UNITS; do
-    if [ -e "$dir/$unit" ] && ! grep -qF "$_KB_UNIT_TAG" "$dir/$unit"; then
+    if [ -e "$dir/$unit" ] && ! _kb_unit_tagged "$dir/$unit"; then
       warn "kb: $dir/$unit is not claudefiles-managed — leaving it untouched"; continue
     fi
     if ! cmp -s <(_kb_unit_text "$unit") "$dir/$unit"; then
@@ -338,11 +339,19 @@ kb_reviewer_apply() { # <enabled:true|false>
     warn "kb: no user systemd here — knowledge-base timers are not active"; return 0
   fi
   if [ "$changed" = true ]; then systemctl --user daemon-reload >/dev/null 2>&1 || true; fi
-  systemctl --user enable --now claudefiles-kb-snapshot.timer >/dev/null 2>&1 \
-    || warn "kb: cannot enable claudefiles-kb-snapshot.timer"
+  if _kb_unit_tagged "$dir/claudefiles-kb-snapshot.timer" && _kb_unit_tagged "$dir/claudefiles-kb-snapshot.service"; then
+    systemctl --user enable --now claudefiles-kb-snapshot.timer >/dev/null 2>&1 \
+      || warn "kb: cannot enable claudefiles-kb-snapshot.timer"
+  else
+    warn "kb: claudefiles-kb-snapshot.timer is not claudefiles-managed — not enabling it"
+  fi
   if [ -e "$(_kb_state_dir)/initialized" ]; then
-    systemctl --user enable --now claudefiles-kb-review.timer >/dev/null 2>&1 \
-      || warn "kb: cannot enable claudefiles-kb-review.timer"
+    if _kb_unit_tagged "$dir/claudefiles-kb-review.timer" && _kb_unit_tagged "$dir/claudefiles-kb-review.service"; then
+      systemctl --user enable --now claudefiles-kb-review.timer >/dev/null 2>&1 \
+        || warn "kb: cannot enable claudefiles-kb-review.timer"
+    else
+      warn "kb: claudefiles-kb-review.timer is not claudefiles-managed — not enabling it"
+    fi
   fi
   if command -v loginctl >/dev/null 2>&1 && \
      [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" = no ]; then
