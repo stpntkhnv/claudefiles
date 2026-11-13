@@ -357,15 +357,42 @@ class FullRun(ReviewBase):
                       'evidence': 'длинная'}])
         self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
         run = self.report().stem
-        with mock.patch.object(kr.ka.kv, 'write_file', side_effect=OSError('disk gone')):
+        real_write_file = kr.ka.kv.write_file
+        calls = []
+
+        def flaky(vault, rel, data):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError('disk gone')
+            return real_write_file(vault, rel, data)
+
+        with mock.patch.object(kr.ka.kv, 'write_file', side_effect=flaky):
             with self.assertRaises(OSError):
                 self.quiet(kr.undo_run, self.vault, run)
-        history = kh.History(self.state, self.vault).init()
-        kr.recover_all(history, self.vault, self.state)
         log = next(self.state.glob(f'runs/{run}/undo-*.journal.json'))
-        states = [record['state'] for record in json.loads(log.read_text())['ops']]
-        self.assertNotIn('intent', states)
+        data = json.loads(log.read_text())
+        self.assertNotEqual(data['state'], 'open')
+        self.assertNotIn('intent', [record['state'] for record in data['ops']])
         self.assertEqual((self.vault / 'global/a.md').read_text(), '---\nname: a\ndescription: a short\n---\nshort\n')
+
+    def test_undo_recovers_other_interrupted_runs_first(self):
+        self.decide([])
+        self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
+        run = self.report().stem
+        history = kh.History(self.state, self.vault).init()
+        history.snapshot('base')
+        before = history.store('global/a.md')
+        after = history.store_bytes(b'half written\n')
+        self.write('global/a.md', 'half written\n')
+        stale = '20261101-000000'
+        stale_journal = self.state / 'runs' / stale / 'journal.json'
+        stale_journal.parent.mkdir(parents=True)
+        stale_journal.write_text(json.dumps({'run': stale, 'state': 'open', 'ops': [{
+            'id': 1, 'kind': 'write', 'origin': 'model', 'subject': 'global/a.md', 'dest': None, 'reason': 'r',
+            'evidence': 'e', 'paths': {'global/a.md': {'before': before, 'after': after}}, 'state': 'intent',
+            'at': 0}]}))
+        self.assertEqual(self.quiet(kr.undo_run, self.vault, run), 0)
+        self.assertEqual(json.loads(stale_journal.read_text())['state'], 'recovered')
 
     def test_reminder(self):
         self.assertEqual(kb_homes.review_reminder(self.vault), '')
