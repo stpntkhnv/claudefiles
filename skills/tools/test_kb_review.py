@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -43,10 +45,20 @@ class ReviewBase(unittest.TestCase):
         self.config(self.home, {'flags': {'kb': True}, 'kb': {
             'vault_path': str(self.vault), 'context': 'personal', 'machine': 'pc', 'reviewer': True}})
         self.config(self.box, {'flags': {'kb': True}, 'kb': {'vault_path': str(self.vault), 'context': 'stellium'}})
+        self.systemd_log = self.base / 'systemctl.log'
+        bin_dir = self.home / '.local/bin'
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        fake_systemctl = bin_dir / 'systemctl'
+        fake_systemctl.write_text('#!/usr/bin/env python3\nimport sys\n'
+                                  f'with open({str(self.systemd_log)!r}, "a") as f:\n'
+                                  '    f.write(" ".join(sys.argv[1:]) + "\\n")\n')
+        fake_systemctl.chmod(0o755)
         patch = mock.patch.dict(os.environ, {
             'HOME': str(self.home), 'CLAUDEFILES_KB_STATE': str(self.state),
             'CLAUDEFILES_KB_BOX_HOMES': str(self.home / 'homes'),
-            'CLAUDEFILES_CONFIG_DIR': str(self.home / '.config/claudefiles'), 'CLAUDEFILES_CONTAINER': '0'})
+            'CLAUDEFILES_CONFIG_DIR': str(self.home / '.config/claudefiles'), 'CLAUDEFILES_CONTAINER': '0',
+            'XDG_CONFIG_HOME': str(self.home / '.config'),
+            'PATH': str(bin_dir) + os.pathsep + os.environ['PATH']})
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -64,6 +76,10 @@ class ReviewBase(unittest.TestCase):
     def note(self, rel, name, description):
         return self.write(rel, f'---\nname: {name}\ndescription: {description}\nmetadata:\n  type: project\n'
                                f'---\n\nbody of {name}\n')
+
+    def quiet(self, func, *args, **kwargs):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return func(*args, **kwargs)
 
 
 class Autofix(ReviewBase):
@@ -181,7 +197,7 @@ class FullRun(ReviewBase):
     def setUp(self):
         super().setUp()
         bin_dir = self.home / '.local/bin'
-        bin_dir.mkdir(parents=True)
+        bin_dir.mkdir(parents=True, exist_ok=True)
         fake = bin_dir / 'claude'
         fake.write_text(FAKE)
         fake.chmod(0o755)
@@ -214,7 +230,7 @@ class FullRun(ReviewBase):
                      {'op': 'move', 'path': 'global/host.md', 'to': 'machine/pc/', 'reason': 'про хост',
                       'evidence': 'только tsikhanau-pc'}],
                     [{'path': 'global/a.md', 'question': 'Оставить?'}])
-        self.assertEqual(kr.review(self.vault, full=True), 0)
+        self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
         text = self.report().read_text()
         for expected in ('status: ok', 'acknowledged: false', '- [ ] `global/a.md`: Оставить?', '## Перенесено',
                          '## Переписано', 'claudefiles-kb undo'):
@@ -228,15 +244,22 @@ class FullRun(ReviewBase):
         self.assertTrue(args[-1].startswith('STDIN:# Curating the knowledge base'))
         settings = json.loads(args[args.index('--settings') + 1])
         self.assertTrue(all('staging' in rule for rule in settings['permissions']['allow']))
+        add_dirs = [args[i + 1] for i, a in enumerate(args) if a == '--add-dir']
+        self.assertIn(str(self.vault), add_dirs)
+        self.assertGreater(len(add_dirs), 1)
+        for directory in add_dirs:
+            directory_rule = kr.rule(directory)
+            self.assertIn(f'Edit({directory_rule})', settings['permissions']['deny'])
+            self.assertIn(f'Write({directory_rule})', settings['permissions']['deny'])
         self.assertTrue((self.state / 'initialized').exists())
-        self.assertEqual(kr.undo_run(self.vault, self.report().stem), 0)
+        self.assertEqual(self.quiet(kr.undo_run, self.vault, self.report().stem), 0)
         self.assertTrue((self.vault / 'global/host.md').exists())
         self.assertFalse((self.vault / 'machine/pc/host.md').exists())
 
     def test_session_edit_during_run_is_not_in_review_commit(self):
         self.decide([])
         with mock.patch.dict(os.environ, {'CLAUDE_FAKE_TOUCH': str(self.vault / 'global/side.md')}):
-            self.assertEqual(kr.review(self.vault), 0)
+            self.assertEqual(self.quiet(kr.review, self.vault), 0)
         history = kh.History(self.state, self.vault)
         files = history.out('show', '--name-only', '--format=', 'HEAD').splitlines()
         self.assertNotIn('global/side.md', files)
@@ -245,22 +268,35 @@ class FullRun(ReviewBase):
 
     def test_model_failure_is_partial_and_keeps_cursor(self):
         self.decide([], envelope={'type': 'result', 'subtype': 'error_max_turns', 'is_error': True, 'result': 'limit'})
-        self.assertEqual(kr.review(self.vault, full=True), 0)
+        self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
         self.assertIn('status: partial', self.report().read_text())
         self.assertFalse((self.state / 'cursor.json').exists())
         self.assertFalse((self.state / 'initialized').exists())
+        self.assertFalse(self.systemd_log.exists())
 
     def test_missing_structured_output_is_partial(self):
         self.decide([], envelope={'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'text'})
-        kr.review(self.vault)
+        self.assertEqual(self.quiet(kr.review, self.vault), 0)
         self.assertIn('status: partial', self.report().read_text())
+
+    def test_full_ok_run_enables_timer_but_partial_does_not(self):
+        unit = Path(os.environ['XDG_CONFIG_HOME']) / 'systemd/user' / kr.TIMER
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        unit.write_text('[Timer]\n')
+        self.decide([])
+        self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
+        self.assertEqual(self.systemd_log.read_text().strip(), f'--user enable --now {kr.TIMER}')
+        self.systemd_log.unlink()
+        self.decide([], envelope={'type': 'result', 'subtype': 'error_max_turns', 'is_error': True, 'result': 'limit'})
+        self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
+        self.assertFalse(self.systemd_log.exists())
 
     def test_failure_mid_operation_is_rolled_back_and_reported(self):
         (self.stage / 'a.md').write_text('---\nname: a\ndescription: a\n---\nmerged\n')
         self.decide([{'op': 'merge', 'sources': ['global/host.md'], 'target': 'global/a.md',
                       'staged': 'staging/a.md', 'reason': 'r', 'evidence': 'e'}])
         with mock.patch.object(kr.ka.kv, 'remove_file', side_effect=OSError('disk gone')):
-            self.assertEqual(kr.review(self.vault), 1)
+            self.assertEqual(self.quiet(kr.review, self.vault), 1)
         self.assertIn('body of a', (self.vault / 'global/a.md').read_text())
         self.assertTrue((self.vault / 'global/host.md').exists())
         self.assertIn('status: failed', self.report().read_text())
@@ -271,7 +307,7 @@ class FullRun(ReviewBase):
     def test_second_review_waits(self):
         handle = kr.lock(self.state)
         try:
-            self.assertEqual(kr.review(self.vault), 0)
+            self.assertEqual(self.quiet(kr.review, self.vault), 0)
             self.assertFalse((self.vault / 'reviews').exists())
         finally:
             handle.close()
@@ -291,7 +327,45 @@ class FullRun(ReviewBase):
             'at': 0}]}))
         self.assertEqual(kr.snapshot(self.vault), 0)
         self.assertIn('body of a', (self.vault / 'global/a.md').read_text())
-        self.assertIn('status: failed', (self.vault / f'reviews/{run}.md').read_text())
+        text = (self.vault / f'reviews/{run}.md').read_text()
+        self.assertIn('status: failed', text)
+        self.assertIn('откатана после обрыва прогона', text)
+
+    def test_interrupted_run_conflict_is_reported_without_claiming_rollback(self):
+        history = kh.History(self.state, self.vault).init()
+        history.snapshot('base')
+        before = history.store('global/a.md')
+        after = history.store_bytes(b'half written\n')
+        self.write('global/a.md', 'something else entirely\n')
+        run = '20261102-000000'
+        journal = self.state / 'runs' / run / 'journal.json'
+        journal.parent.mkdir(parents=True)
+        journal.write_text(json.dumps({'run': run, 'state': 'open', 'ops': [{
+            'id': 1, 'kind': 'write', 'origin': 'model', 'subject': 'global/a.md', 'dest': None, 'reason': 'r',
+            'evidence': 'e', 'paths': {'global/a.md': {'before': before, 'after': after}}, 'state': 'intent',
+            'at': 0}]}))
+        self.assertEqual(kr.snapshot(self.vault), 0)
+        text = (self.vault / f'reviews/{run}.md').read_text()
+        self.assertIn('status: failed', text)
+        self.assertIn('не откатана после обрыва', text)
+        self.assertNotIn('незавершённая операция откатана', text)
+        self.assertEqual((self.vault / 'global/a.md').read_text(), 'something else entirely\n')
+
+    def test_undo_crash_is_recovered_consistently(self):
+        (self.stage / 'a.md').write_text('---\nname: a\ndescription: a short\n---\nshort\n')
+        self.decide([{'op': 'write', 'path': 'global/a.md', 'staged': 'staging/a.md', 'reason': 'ужата',
+                      'evidence': 'длинная'}])
+        self.assertEqual(self.quiet(kr.review, self.vault, full=True), 0)
+        run = self.report().stem
+        with mock.patch.object(kr.ka.kv, 'write_file', side_effect=OSError('disk gone')):
+            with self.assertRaises(OSError):
+                self.quiet(kr.undo_run, self.vault, run)
+        history = kh.History(self.state, self.vault).init()
+        kr.recover_all(history, self.vault, self.state)
+        log = next(self.state.glob(f'runs/{run}/undo-*.journal.json'))
+        states = [record['state'] for record in json.loads(log.read_text())['ops']]
+        self.assertNotIn('intent', states)
+        self.assertEqual((self.vault / 'global/a.md').read_text(), '---\nname: a\ndescription: a short\n---\nshort\n')
 
     def test_reminder(self):
         self.assertEqual(kb_homes.review_reminder(self.vault), '')
@@ -301,6 +375,13 @@ class FullRun(ReviewBase):
         self.assertIn('1 report(s) not acknowledged', text)
         self.assertIn('1 open question(s)', text)
         self.assertIn('20261101-000000.md', text)
+
+    def test_reminder_skips_unreadable_entries(self):
+        (self.vault / 'reviews/x.md').mkdir(parents=True)
+        self.write('reviews/20261101-000000.md', '---\nacknowledged: false\n---\n- [ ] `x`: q?\n')
+        text = kb_homes.review_reminder(self.vault)
+        self.assertIn('1 report(s) not acknowledged', text)
+        self.assertIn('1 open question(s)', text)
 
     def test_cli_requires_reviewer(self):
         self.config(self.home, {'flags': {'kb': True}, 'kb': {'vault_path': str(self.vault), 'context': 'personal',

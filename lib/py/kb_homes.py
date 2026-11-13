@@ -180,7 +180,12 @@ def layer_prompts(vault, env, home):
 def review_reminder(vault):
     pending, unacknowledged, questions = [], 0, 0
     for path in sorted((Path(vault) / kv.REPORTS).glob('*.md')):
-        text = path.read_text(errors='replace')
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(errors='replace')
+        except OSError:
+            continue
         open_questions = sum(1 for line in text.splitlines() if line.lstrip().startswith('- [ ]'))
         acknowledged = str(kv.frontmatter(text).get('acknowledged')).lower() == 'true'
         questions += open_questions

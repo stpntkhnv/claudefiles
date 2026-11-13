@@ -352,16 +352,21 @@ def rule(path):
 
 def model_command(binary, vault, run_dir, envs, model):
     staging = Path(run_dir) / 'staging'
-    settings = {'autoMemoryEnabled': False, 'permissions': {
-        'allow': [f'Write({rule(staging)})', f'Edit({rule(staging)})'],
-        'deny': ['Bash', 'WebFetch', 'WebSearch']}}
-    command = [binary, '-p', '--model', model, '--restricted', '--strict-mcp-config',
-               '--permission-mode', 'dontAsk', '--output-format', 'json', '--json-schema', json.dumps(SCHEMA),
-               '--no-session-persistence', '--settings', json.dumps(settings), '--add-dir', str(vault)]
+    dirs = [Path(vault)]
     for env in envs:
         root = kb_homes.context_root(env)
         if root and root.is_dir():
-            command += ['--add-dir', str(root)]
+            dirs.append(root)
+    deny = ['Bash', 'WebFetch', 'WebSearch']
+    for directory in dirs:
+        deny += [f'Edit({rule(directory)})', f'Write({rule(directory)})']
+    settings = {'autoMemoryEnabled': False, 'permissions': {
+        'allow': [f'Write({rule(staging)})', f'Edit({rule(staging)})'], 'deny': deny}}
+    command = [binary, '-p', '--model', model, '--restricted', '--strict-mcp-config',
+               '--permission-mode', 'dontAsk', '--output-format', 'json', '--json-schema', json.dumps(SCHEMA),
+               '--no-session-persistence', '--settings', json.dumps(settings)]
+    for directory in dirs:
+        command += ['--add-dir', str(directory)]
     return command
 
 
@@ -448,13 +453,37 @@ def write_report(vault, run, status, error, records, skipped, questions, unresol
     return rel
 
 
+def _recovery(journal):
+    skipped = []
+    rolled = conflicted = False
+    for record in journal.data['ops']:
+        if record['state'] == 'rolled-back':
+            rolled = True
+            problem = 'откатана после обрыва прогона'
+        elif record['state'] == 'conflict':
+            conflicted = True
+            problem = 'не откатана после обрыва: файл изменён после прогона, проверь вручную'
+        else:
+            continue
+        skipped.append(dict(kind=record['kind'], origin=record['origin'], subject=record['subject'],
+                            reason=record['reason'], evidence=record['evidence'], problem=problem))
+    if not rolled and not conflicted:
+        return 'прогон был прерван между операциями', skipped
+    error = 'прогон был прерван'
+    if rolled:
+        error += '; незавершённая операция откатана'
+    if conflicted:
+        error += '; незавершённую операцию не удалось откатить, проверь вручную'
+    return error, skipped
+
+
 def recover_all(history, vault, state):
     for path in sorted((state / 'runs').glob('*/*journal.json')):
         journal = ka.recover(history, vault, path)
         if journal is None or path.name != 'journal.json' or (Path(vault) / kv.REPORTS / f'{journal.run}.md').exists():
             continue
-        rel = write_report(vault, journal.run, 'failed', 'прогон был прерван, незавершённая операция откатана',
-                           journal.done(), [], [], [], {})
+        error, skipped = _recovery(journal)
+        rel = write_report(vault, journal.run, 'failed', error, journal.done(), skipped, [], [], {})
         history.commit_paths([rel], f'review {journal.run} (recovered report)')
 
 
@@ -486,6 +515,7 @@ def review(vault, full=False):
         cursor = rm.json_read(state / 'cursor.json', {}) or {}
         status, error, work = 'ok', None, {}
         skipped, questions, unresolved, tasks = [], [], [], {}
+        recovered = True
         try:
             envs = environments()
             mapping, conflicts, _, missed = autofix(history, vault, journal, envs)
@@ -500,6 +530,7 @@ def review(vault, full=False):
             except ModelError as failure:
                 status, error = 'partial', str(failure)
             else:
+                questions += decision['questions']
                 ops, bad = ka.from_model(vault, run_dir, decision)
                 done, missed = ka.run_ops(history, vault, journal, ops, work['hashes'], tasks)
                 skipped += bad + missed
@@ -507,7 +538,6 @@ def review(vault, full=False):
                 _, missed = ka.run_fixups(history, vault, journal, ka.layers_of(p for r in done for p in r['paths']),
                               links, merged)
                 skipped += missed
-                questions += decision['questions']
             _, missed = ka.run_ops(history, vault, journal, empty_dir_ops(vault))
             skipped += missed
         except Exception as failure:
@@ -516,9 +546,14 @@ def review(vault, full=False):
                 ka.settle(history, vault, journal)
             except Exception as again:
                 error += f'; откат незавершённой операции не удался: {again}'
+                recovered = False
+            else:
+                _, missed = _recovery(journal)
+                skipped += missed
         report = write_report(vault, run, status, error, journal.done(), skipped, questions, unresolved, tasks)
         history.commit_paths(journal.paths() + [report], f'review {run}')
-        journal.close()
+        if recovered:
+            journal.close()
         if status == 'ok':
             rm.atomic_json(state / 'cursor.json', dict(cursor=work.get('next_cursor', 0), last_run=time.time()))
             if full:
@@ -554,7 +589,13 @@ def undo_run(vault, run, op_id=None):
         print(f'kb undo: {error}')
         return 1
     with handle:
-        results = ka.undo(kh.History(state, vault).init(), vault, journal, op_id)
+        history = kh.History(state, vault).init()
+        recover_all(history, vault, state)
+        try:
+            results = ka.undo(history, vault, journal, op_id)
+        except BaseException:
+            recover_all(history, vault, state)
+            raise
     for number, outcome in results:
         print(f'{number}: {outcome}')
     return 0 if all(outcome == 'undone' for _, outcome in results) else 1
