@@ -128,6 +128,23 @@ class Autofix(ReviewBase):
         self.assertTrue((self.vault / 'projects/-home-z').exists())
         self.assertTrue(legacy.exists())
 
+    def test_undo_restores_a_deleted_duplicate(self):
+        orbi = self.box / 'main/orbi'
+        orbi.mkdir()
+        self.write('contexts/stellium/projects/orbi/same.md', 'same\n')
+        copy = self.write(f'projects/{kr.slug(orbi)}/memory/same.md', 'same\n')
+        history = kh.History(self.state, self.vault).init()
+        history.snapshot('base')
+        journal = ka.Journal(self.state / 'runs/r/journal.json', 'r')
+        journal.save()
+        _, _, records, _ = kr.autofix(history, self.vault, journal, kr.environments())
+        self.assertFalse(copy.exists())
+        delete = next(r for r in records if r['kind'] == 'delete')
+        results = dict(ka.undo(history, self.vault, journal.path))
+        self.assertEqual(results[delete['id']], 'undone')
+        self.assertNotIn('conflict', results.values())
+        self.assertEqual(copy.read_text(), 'same\n')
+
     def test_duplicate_op_skipped_when_copy_changes_during_run(self):
         self.write('contexts/stellium/projects/orbi/same.md', 'same\n')
         copy = self.write('projects/-x/memory/same.md', 'same\n')

@@ -392,6 +392,131 @@ class ApplyTests(unittest.TestCase):
         self.assertNotIn('[[b]]', (self.vault / 'global/INDEX.md').read_text())
         self.assertIn('- [[b]]: note b', (self.vault / 'machine/pc/MEMORY.md').read_text())
 
+    def test_edit_after_the_intent_record_is_not_overwritten(self):
+        ops, _ = self.decide({'op': 'write', 'path': 'global/a.md', 'staged': self.stage('a.md', 'new a\n'),
+                              'reason': 'r', 'evidence': 'e'})
+        original = self.journal.add
+
+        def add_then_edit(record):
+            original(record)
+            (self.vault / 'global/a.md').write_text('edited by a session\n')
+
+        with mock.patch.object(self.journal, 'add', side_effect=add_then_edit):
+            records, skipped = ka.run_ops(self.history, self.vault, self.journal, ops, self.expected(), {})
+        self.assertEqual(records, [])
+        self.assertIn('изменён во время прогона', skipped[0]['problem'])
+        self.assertEqual((self.vault / 'global/a.md').read_text(), 'edited by a session\n')
+        self.assertEqual(ka.Journal(self.journal.path).data['ops'][0]['state'], 'rolled-back')
+
+    def test_rmdir_keeps_a_note_created_after_the_emptiness_check(self):
+        legacy = self.vault / 'repositories/old-1'
+        (legacy / 'sub').mkdir(parents=True)
+        (legacy / '.memory-init.lock').write_text('')
+        original = Path.rglob
+        created = []
+
+        def rglob(path, pattern, *args, **kwargs):
+            found = list(original(path, pattern, *args, **kwargs))
+            if path == legacy and pattern == '*' and not created:
+                created.append(True)
+                (legacy / 'sub/new.md').write_text('new note\n')
+            return iter(found)
+
+        with mock.patch.object(Path, 'rglob', autospec=True, side_effect=rglob):
+            ka._remove_dir(legacy)
+        self.assertTrue(created)
+        self.assertEqual((legacy / 'sub/new.md').read_text(), 'new note\n')
+
+    def test_symlink_into_reports_is_protected_from_the_model(self):
+        report = self.write('reviews/private.md', 'report\n')
+        (self.vault / 'contexts/c').mkdir(parents=True)
+        (self.vault / 'contexts/c/MEMORY.md').symlink_to('../../reviews/private.md')
+        expected = self.expected()
+        expected['contexts/c/MEMORY.md'] = kv.file_hash(self.vault / 'contexts/c/MEMORY.md')
+        ops, _ = self.decide({'op': 'write', 'path': 'contexts/c/MEMORY.md', 'staged': self.stage('m.md', 'x\n'),
+                              'reason': 'r', 'evidence': 'e'})
+        records, skipped = ka.run_ops(self.history, self.vault, self.journal, ops, expected, {})
+        self.assertEqual(records, [])
+        self.assertIn('защищённый путь', skipped[0]['problem'])
+        self.assertEqual(report.read_text(), 'report\n')
+
+    def test_open_task_status_cannot_change(self):
+        self.note('global/task.md', 'task', 'open task', extra='  status: active\n  link: branch:x\n')
+        task = self.vault / 'global/task.md'
+        task.write_text(task.read_text().replace('type: project', 'type: task'))
+        done = ('---\nname: task\ndescription: open task\nmetadata:\n  type: task\n  status: done\n'
+                '  link: branch:x\n---\nshort\n')
+        ops, _ = self.decide({'op': 'write', 'path': 'global/task.md', 'staged': self.stage('t.md', done),
+                              'reason': 'r', 'evidence': 'e'})
+        accepted, skipped = ka.validate(self.vault, ops, self.expected(), {})
+        self.assertEqual(accepted, [])
+        self.assertIn('статус', skipped[0]['problem'])
+
+    def test_model_path_that_cannot_be_a_file_is_skipped(self):
+        (self.vault / 'global/folder').mkdir()
+        ops, bad = self.decide(
+            {'op': 'write', 'path': 'global/folder', 'staged': self.stage('f.md', 'x\n'), 'reason': 'r',
+             'evidence': 'e'},
+            {'op': 'write', 'path': 'global/b.md/inner.md', 'staged': self.stage('i.md', 'x\n'), 'reason': 'r',
+             'evidence': 'e'},
+            {'op': 'move', 'path': 'global/b.md', 'to': 'global/a.md/', 'reason': 'r', 'evidence': 'e'},
+            {'op': 'write', 'path': 'global/a.md', 'staged': self.stage('a.md', 'new a\n'), 'reason': 'r',
+             'evidence': 'e'})
+        self.assertEqual(bad, [])
+        records, skipped = ka.run_ops(self.history, self.vault, self.journal, ops, self.expected(), {})
+        self.assertEqual([r['subject'] for r in records], ['global/a.md'])
+        self.assertEqual(len(skipped), 3)
+        self.assertTrue(all('путь не может быть файлом' in s['problem'] for s in skipped))
+        self.assertEqual((self.vault / 'global/a.md').read_text(), 'new a\n')
+        self.assertTrue((self.vault / 'global/folder').is_dir())
+
+    def test_interrupted_undo_reconciles_the_run_journal(self):
+        ops, _ = self.decide({'op': 'delete', 'path': 'global/b.md', 'reason': 'r', 'evidence': 'e'})
+        records, _ = ka.run_ops(self.history, self.vault, self.journal, ops, self.expected(), {})
+        op_id = records[0]['id']
+        original = ka.Journal.save
+        failed = []
+
+        def save(journal):
+            if (journal.path == self.journal.path and not failed
+                    and any(r['state'] == 'undone' for r in journal.data['ops'])):
+                failed.append(True)
+                raise OSError('killed')
+            original(journal)
+
+        with mock.patch.object(ka.Journal, 'save', autospec=True, side_effect=save):
+            with self.assertRaises(OSError):
+                ka.undo(self.history, self.vault, self.journal.path, op_id)
+        self.assertEqual(ka.Journal(self.journal.path).data['ops'][0]['state'], 'done')
+        log = next(self.run_dir.glob('undo-*.journal.json'))
+        ka.recover(self.history, self.vault, log)
+        self.assertEqual(ka.Journal(self.journal.path).data['ops'][0]['state'], 'undone')
+        self.assertTrue((self.vault / 'global/b.md').exists())
+
+    def test_whole_run_undo_restores_every_file_exactly(self):
+        self.write('global/INDEX.md', '# Global\n- [[a]]: hand-written a\n- [[b]]: note b\n- [[gone]]: dead\n')
+        self.write('global/c.md', '---\nname: c\ndescription: c\n---\nsee [b](b.md)\n')
+        before = {rel: (self.vault / rel).read_bytes() for rel in
+                  ('global/INDEX.md', 'global/a.md', 'global/b.md', 'global/c.md')}
+        ops, _ = self.decide({'op': 'move', 'path': 'global/b.md', 'to': 'machine/pc/', 'reason': 'r',
+                              'evidence': 'e'})
+        records, _ = self.apply(ops)
+        self.assertEqual({'move', 'unindex', 'relink', 'reindex'}, {r['kind'] for r in records})
+        results = ka.undo(self.history, self.vault, self.journal.path)
+        self.assertTrue(results and all(outcome == 'undone' for _, outcome in results))
+        self.assertEqual({rel: (self.vault / rel).read_bytes() for rel in before}, before)
+        self.assertFalse((self.vault / 'machine/pc/b.md').exists())
+        self.assertFalse((self.vault / 'machine/pc/MEMORY.md').exists())
+
+    def test_undo_of_a_reindex_restores_the_index(self):
+        self.write('global/INDEX.md', '# Global\n- [[a]]: note a\n- [[gone]]: dead\n')
+        before = (self.vault / 'global/INDEX.md').read_bytes()
+        records, _ = ka.run_ops(self.history, self.vault, self.journal, ka.reindex_ops(self.vault, ['global']))
+        self.assertNotEqual((self.vault / 'global/INDEX.md').read_bytes(), before)
+        self.assertEqual(ka.undo(self.history, self.vault, self.journal.path, records[0]['id']),
+                         [(records[0]['id'], 'undone')])
+        self.assertEqual((self.vault / 'global/INDEX.md').read_bytes(), before)
+
     def test_recovery_after_an_interrupted_undo_fixup_restores_links(self):
         self.write('global/c.md', '---\nname: c\ndescription: c\n---\nsee [b](b.md)\n')
         ops, _ = self.decide({'op': 'move', 'path': 'global/b.md', 'to': 'machine/pc/', 'reason': 'r',

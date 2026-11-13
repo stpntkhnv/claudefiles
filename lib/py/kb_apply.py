@@ -3,11 +3,13 @@ from datetime import datetime
 import fcntl
 import os
 from pathlib import Path
-import shutil
 import time
 
 import kb_vault as kv
 import repo_memory as rm
+
+
+FIXUPS = ('reindex', 'relink', 'unindex')
 
 
 class Stale(Exception):
@@ -15,12 +17,12 @@ class Stale(Exception):
 
 
 def op(kind, origin, writes=None, removes=None, reason='', evidence='', subject=None, dest=None, dirs=None,
-       links=None, merged=None, deps=None, base=None):
+       links=None, merged=None, deps=None, base=None, undoes=None):
     writes = dict(writes or {})
     removes = list(removes or [])
     return dict(kind=kind, origin=origin, writes=writes, removes=removes, dirs=list(dirs or []),
                 reason=reason, evidence=evidence, dest=dest, links=dict(links or {}), merged=list(merged or []),
-                deps=list(deps or []), guard={}, base=dict(base or {}),
+                deps=list(deps or []), guard={}, base=dict(base or {}), undoes=undoes,
                 subject=subject or (removes[0] if removes else next(iter(writes), '')))
 
 
@@ -142,8 +144,9 @@ def _task_problem(vault, entry, tasks):
             if kv.note_type(text) != 'task' or _closable(vault, path, text, tasks):
                 continue
             new = data.decode(errors='replace')
-            if kv.note_type(new) != 'task' or kv.meta(new).get('link') != kv.meta(text).get('link'):
-                return 'заметку о незакрытой задаче можно только ужать, сохранив тип и ссылку: ' + path
+            if (kv.note_type(new) != 'task' or kv.meta(new).get('link') != kv.meta(text).get('link')
+                    or kv.meta(new).get('status') != kv.meta(text).get('status')):
+                return 'заметку о незакрытой задаче можно только ужать, сохранив тип, статус и ссылку: ' + path
     return None
 
 
@@ -178,9 +181,16 @@ def _layer_problem(vault, path):
     return None
 
 
+def _file_problem(vault, path):
+    if (vault / path).is_dir() or any((vault / parent).is_file() for parent in Path(path).parents):
+        return 'путь не может быть файлом: ' + path
+    return None
+
+
 def _problem(vault, entry, expected, tasks, counts, canon):
+    script = entry['origin'] == 'script'
     for path in sorted(touched(entry)):
-        if kv.protected(path, script=entry['origin'] == 'script'):
+        if kv.protected(path, script=script) or kv.protected(canon[path], script=script):
             return 'защищённый путь ' + path
         if counts[canon[path]] > 1:
             return 'путь участвует в нескольких операциях: ' + path
@@ -193,7 +203,7 @@ def _problem(vault, entry, expected, tasks, counts, canon):
         return 'путь назначения уже существует: ' + entry['dest']
     if entry['origin'] == 'model':
         for path in entry['writes']:
-            problem = _layer_problem(vault, path)
+            problem = _layer_problem(vault, path) or _file_problem(vault, path)
             if problem:
                 return problem
         return _task_problem(vault, entry, tasks)
@@ -217,7 +227,7 @@ def validate(vault, ops, expected=None, tasks=None, table=None):
     problems = [broken.get(index) or _problem(vault, entry, expected, tasks, counts, canon)
                 for index, entry in enumerate(ops)]
     while True:
-        candidates = [index for index, problem in enumerate(problems) if not problem]
+        candidates = [index for index, problem in enumerate(problems) if not problem and ops[index]['kind'] != 'undo']
         clashes = _name_clashes(vault, [ops[index] for index in candidates], table)
         if not clashes:
             break
@@ -247,7 +257,14 @@ def _remove_dir(root):
             handles.append(handle)
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if not [p for p in root.rglob('*') if (p.is_file() or p.is_symlink()) and not p.name.endswith('.lock')]:
-            shutil.rmtree(root, ignore_errors=True)
+            for current, _, files in os.walk(root, topdown=False):
+                for name in files:
+                    if name.endswith('.lock'):
+                        os.unlink(os.path.join(current, name))
+                try:
+                    os.rmdir(current)
+                except OSError:
+                    pass
     except BlockingIOError:
         pass
     finally:
@@ -256,17 +273,26 @@ def _remove_dir(root):
 
 
 def apply_op(history, vault, journal, entry):
-    for path, expected in entry['guard'].items():
-        if kv.file_hash(Path(vault) / path) != expected:
-            raise Stale(path)
+    vault = Path(vault)
     paths = {}
     for path in sorted(touched(entry)):
+        data = (vault / path).read_bytes() if (vault / path).is_file() else None
+        if (None if data is None else kv.sha(data)) != entry['guard'][path]:
+            raise Stale(path)
         after = history.store_bytes(entry['writes'][path]) if path in entry['writes'] else None
-        paths[path] = dict(before=history.store(path), after=after)
+        paths[path] = dict(before=None if data is None else history.store_bytes(data), after=after)
+    for path in entry['deps']:
+        if kv.file_hash(vault / path) != entry['guard'][path]:
+            raise Stale(path)
     record = dict(id=journal.next_id(), kind=entry['kind'], origin=entry['origin'], subject=entry['subject'],
                   dest=entry['dest'], reason=entry['reason'], evidence=entry['evidence'], links=entry['links'],
-                  merged=entry['merged'], paths=paths, state='intent', at=time.time())
+                  merged=entry['merged'], undoes=entry['undoes'], paths=paths, state='intent', at=time.time())
     journal.add(record)
+    for path in sorted(touched(entry)):
+        if kv.file_hash(vault / path) != entry['guard'][path]:
+            record['state'] = 'rolled-back'
+            journal.save()
+            raise Stale(path)
     for path, data in entry['writes'].items():
         kv.write_file(vault, path, data)
     for path in entry['removes']:
@@ -391,11 +417,14 @@ def collect_links(records):
     return links, merged
 
 
-def run_fixups(history, vault, journal, layers, links=None, merged=None):
-    links, merged = dict(links or {}), set(merged or ())
-    journal.data['pending'] = dict(layers=sorted(set(layers)), links=links, merged=sorted(merged))
+def run_fixups(history, vault, journal, layers, links=None, merged=None, restored=()):
+    vault = Path(vault)
+    links, merged, restored = dict(links or {}), set(merged or ()), set(restored)
+    journal.data['pending'] = dict(layers=sorted(set(layers)), links=links, merged=sorted(merged),
+                                   restored=sorted(restored))
     journal.save()
-    layers = set(layers) | layers_of(links) | layers_of(links.values())
+    layers = {layer for layer in set(layers) | layers_of(links) | layers_of(links.values())
+              if kv.index_path(vault, layer).relative_to(vault).as_posix() not in restored}
     records, skipped = [], []
     for build in (lambda: unindex_ops(vault, links, merged), lambda: relink_ops(vault, links),
                   lambda: reindex_ops(vault, layers)):
@@ -430,18 +459,36 @@ def settle(history, vault, journal):
             record['state'] = 'conflict'
     journal.save()
     pending = journal.data.get('pending') or {}
-    links, merged = collect_links(journal.done())
+    done = journal.done()
+    links, merged = collect_links(done)
     links.update(pending.get('links') or {})
     merged |= set(pending.get('merged') or ())
-    layers = layers_of(p for r in journal.done() for p in r['paths']) | set(pending.get('layers') or ())
+    restored, sources = set(pending.get('restored') or ()), done
+    if journal.path.name.startswith('undo-'):
+        kinds = {r['id']: r['kind'] for r in Journal(journal.path.with_name('journal.json')).data['ops']}
+        sources = [r for r in done if kinds.get(r.get('undoes')) not in FIXUPS]
+        restored |= {p for r in done for p in r['paths']}
+    layers = layers_of(p for r in sources for p in r['paths']) | set(pending.get('layers') or ())
     if layers or links:
-        run_fixups(history, vault, journal, layers, links, merged)
+        run_fixups(history, vault, journal, layers, links, merged, restored)
+
+
+def _mark_undone(log):
+    ids = {r['undoes'] for r in log.done() if r.get('undoes') is not None}
+    main = Journal(log.path.with_name('journal.json'))
+    changed = [r for r in main.data['ops'] if r['id'] in ids and r['state'] == 'done']
+    for record in changed:
+        record['state'] = 'undone'
+    if changed:
+        main.save()
 
 
 def recover(history, vault, journal_path):
     journal = Journal(journal_path)
     if journal.data['state'] != 'open':
         return None
+    if journal.path.name.startswith('undo-'):
+        _mark_undone(journal)
     settle(history, vault, journal)
     history.commit_paths(journal.paths(), f'review {journal.run} (recovered)')
     journal.close('recovered')
@@ -456,7 +503,7 @@ def undo(history, vault, journal_path, op_id=None):
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
     log = Journal(journal.path.with_name(f'undo-{stamp}.journal.json'), journal.run)
     log.save()
-    results, links, layers = [], {}, set()
+    results, links, layers, restored = [], {}, set(), set()
     for record in reversed(records):
         base = {p: kv.file_hash(vault / p) for p in record['paths']}
         if any(history.current(p) != v['after'] for p, v in record['paths'].items()):
@@ -466,19 +513,21 @@ def undo(history, vault, journal_path, op_id=None):
         removes = [p for p, v in record['paths'].items() if not v['before']]
         entry_links = {new: old for old, new in record['links'].items()} if record['kind'] == 'move' else None
         entry = op('undo', 'script', writes, removes, f'откат операции {record["id"]}', record['subject'],
-                   subject=record['subject'], base=base, links=entry_links)
+                   subject=record['subject'], base=base, links=entry_links, undoes=record['id'])
         done, skipped = run_ops(history, vault, log, [entry])
         if not done:
             results.append((record['id'], 'conflict'))
             continue
         record['state'] = 'undone'
         journal.save()
-        layers |= layers_of(record['paths'])
+        restored |= set(record['paths'])
+        if record['kind'] not in FIXUPS:
+            layers |= layers_of(record['paths'])
         if record['kind'] == 'move':
             links.update({new: old for old, new in (record.get('links') or {}).items()})
         results.append((record['id'], 'undone'))
     if layers:
-        run_fixups(history, vault, log, layers, links, set())
+        run_fixups(history, vault, log, layers, links, set(), restored)
     history.commit_paths(log.paths(), f'undo {journal.run}' + (f' {op_id}' if op_id else ''))
     log.close()
     return list(reversed(results))
