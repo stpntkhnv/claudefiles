@@ -102,13 +102,28 @@ class VaultTests(unittest.TestCase):
         self.assertIn('- [[moved]]: moved note', text)
         self.assertNotIn('gone.md', text)
 
-    def test_reindex_syncs_descriptions_of_own_notes(self):
+    def test_reindex_keeps_lines_and_reports_mismatches(self):
         self.note('global/a.md', 'a', 'new wording')
+        self.note('global/same.md', 'same', 'same wording')
         self.note('machine/pc/b.md', 'b', 'machine wording')
-        self.write('global/INDEX.md', '- [[a]]: old wording\n- [[b]]: kept as written\n')
+        self.note('global/fresh.md', 'fresh', 'fresh note')
+        self.write('global/INDEX.md', '- [[a]]: curated wording\n- [[same]]: same wording\n- [[b]]: kept as written\n')
         text = kv.reindex(self.vault, 'global')
-        self.assertIn('- [[a]]: new wording', text)
-        self.assertIn('- [[b]]: kept as written', text)
+        self.assertEqual(text, '- [[a]]: curated wording\n- [[same]]: same wording\n- [[b]]: kept as written\n'
+                               '- [[fresh]]: fresh note\n')
+        self.assertEqual(kv.description_mismatches(self.vault, 'global'), [
+            {'index': 'global/INDEX.md', 'note': 'global/a.md', 'line': '- [[a]]: curated wording',
+             'description': 'new wording'}])
+        self.assertEqual(kv.description_mismatches(self.vault, 'machine/pc'), [])
+
+    def test_sync_conflict_copies_are_not_notes(self):
+        self.note('contexts/s/a.md', 'a', 'a')
+        self.write('contexts/s/MEMORY.md', '# s\n- [[a]]: a\n')
+        self.write('contexts/s/MEMORY.sync-conflict-20260816-210627-7RTHPIT.md', '# s\n- [[a]]: older\n')
+        self.write('contexts/s/a.sync-conflict-20260816-210627-7RTHPIT.md', 'older a\n')
+        self.assertEqual(kv.all_notes(self.vault), ['contexts/s/a.md'])
+        self.assertEqual(kv.layer_notes(self.vault, 'contexts/s'), ['contexts/s/a.md'])
+        self.assertIsNone(kv.reindex(self.vault, 'contexts/s'))
 
     def test_rename_wiki(self):
         self.assertEqual(kv.rename_wiki('see [[old]], [[old|alias]], [[old#part]], [[other]]', {'old': 'new'}),

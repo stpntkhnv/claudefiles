@@ -176,6 +176,23 @@ class Autofix(ReviewBase):
         self.assertEqual(work['curated'], [{'folder': 'contexts/stellium/projects/chat-jti',
                                             'candidates': ['repositories/chatjti-0123456789abcdef01234567']}])
 
+    def test_worklist_lists_index_mismatches_and_conflict_copies(self):
+        self.note('global/a.md', 'a', 'current wording')
+        self.note('contexts/stellium/b.md', 'b', 'b now')
+        self.write('global/INDEX.md', '# g\n- [[a]]: older wording\n')
+        self.write('contexts/stellium/MEMORY.md', '- [[b]]: b then\n')
+        conflict = 'global/a.sync-conflict-20261001-101010-ABCDEF7.md'
+        self.write(conflict, 'older a\n')
+        _, conflicts = kr.conflict_ops(self.vault)
+        work = kr.build_worklist(self.vault, 'r', [], [], conflicts, {}, False, {})
+        self.assertEqual(work['index_mismatch'], [
+            {'index': 'global/INDEX.md', 'note': 'global/a.md', 'line': '- [[a]]: older wording',
+             'description': 'current wording'},
+            {'index': 'contexts/stellium/MEMORY.md', 'note': 'contexts/stellium/b.md', 'line': '- [[b]]: b then',
+             'description': 'b now'}])
+        self.assertIn(conflict, work['hashes'])
+        self.assertNotIn(conflict, work['selection'])
+
     def test_rotation(self):
         for i in range(8):
             self.write(f'global/n{i}.md', f'n{i}')

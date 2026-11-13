@@ -52,8 +52,9 @@ was approved, and report what changed on disk.
 The run directory holds `worklist.json`: content hashes of every note, the notes selected for this
 run, task statuses checked against Git (`merged` with the merge commit, `branch-merged`,
 `unconfirmed`, `declared-done`, `declared-dropped`), legacy folders with their new homes, oversize
-notes, indexes over their caps, untyped notes, dead paths, unequal sync conflicts, curated folders
-that duplicate a repository memory, layers with two indexes.
+notes, indexes over their caps, index lines that differ from their note's description
+(`index_mismatch`), untyped notes, dead paths, unequal sync conflicts, curated folders that
+duplicate a repository memory, layers with two indexes.
 
 - You cannot change the vault. Write every new or rewritten file into `staging/` of the run directory
   and return decisions:
@@ -68,6 +69,10 @@ that duplicate a repository memory, layers with two indexes.
 - Legacy folders: move or merge every note into the folder's home. For a folder without a home,
   propose a home from the content, or delete stale notes on the usual evidence. Never delete a note
   only because its folder is gone.
-- Indexes over their cap: move notes to narrower layers first, then shorten lines.
+- Indexes over their cap: move notes to narrower layers first, then shorten lines; when you shorten
+  a line, shorten the note's `description` to the same wording.
+- `index_mismatch`: read the note body and bring the note's `description` and the index line to what
+  the body says, keeping every fact that is still true. Write both through `write` decisions. When
+  unsure, ask in `questions`.
 - Never touch `reviews/`, files and folders starting with a dot, `.obsidian/`, `*.kdbx`.
 - Anything that needs the user goes into `questions`: the path and a short question in Russian.

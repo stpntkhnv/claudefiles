@@ -203,7 +203,7 @@ def layer_notes(vault, layer):
     result = []
     for path in sorted(root.rglob('*.md')):
         rel = path.relative_to(vault)
-        if path.is_symlink() or protected(rel) or layer_of(rel) != layer:
+        if path.is_symlink() or protected(rel) or layer_of(rel) != layer or CONFLICT.search(path.name):
             continue
         if path.parent == root and path.name in INDEX_NAMES:
             continue
@@ -216,7 +216,8 @@ def all_notes(vault):
     result = []
     for path in sorted(vault.rglob('*.md')):
         rel = path.relative_to(vault)
-        if len(rel.parts) < 2 or path.is_symlink() or protected(rel) or path.name in INDEX_NAMES:
+        if (len(rel.parts) < 2 or path.is_symlink() or protected(rel) or path.name in INDEX_NAMES
+                or CONFLICT.search(path.name)):
             continue
         result.append(rel.as_posix())
     return result
@@ -256,17 +257,25 @@ def rename_wiki(text, renames):
     return WIKI_PARTS.sub(swap, text)
 
 
-def _sync_description(vault, line, layer, table):
-    match = INDEX_LINE.match(line)
-    if not match:
-        return line
-    hits = lookup(table, match.group(2).strip())
-    if len(hits) != 1 or layer_of(hits[0]) != layer:
-        return line
-    value = frontmatter(read(vault, hits[0])).get('description')
-    if not isinstance(value, str) or not value or value == match.group(3).strip():
-        return line
-    return match.group(1) + value
+def description_mismatches(vault, layer, table=None):
+    vault = Path(vault)
+    index = index_path(vault, layer)
+    if not index.is_file():
+        return []
+    table = names(vault) if table is None else table
+    rel = index.relative_to(vault).as_posix()
+    result = []
+    for line in index.read_text(errors='replace').splitlines():
+        match = INDEX_LINE.match(line)
+        if not match:
+            continue
+        hits = lookup(table, match.group(2).strip())
+        if len(hits) != 1 or layer_of(hits[0]) != layer:
+            continue
+        value = frontmatter(read(vault, hits[0])).get('description')
+        if isinstance(value, str) and value and value != match.group(3).strip():
+            result.append(dict(index=rel, note=hits[0], line=line, description=value))
+    return result
 
 
 def reindex(vault, layer, table=None):
@@ -303,7 +312,7 @@ def reindex(vault, layer, table=None):
                 fixed = fixed.replace('](' + link, '](' + os.path.relpath(vault / repaired, directory), 1)
             referenced.add(repaired)
         if keep:
-            out.append(_sync_description(vault, fixed, layer, table))
+            out.append(fixed)
     missing = [rel for rel in layer_notes(vault, layer) if rel not in referenced]
     if missing and not out:
         out += [f'# {layer}', '']

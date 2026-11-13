@@ -288,13 +288,16 @@ def build_worklist(vault, run, envs, mapping, conflicts, tasks, full, cursor):
     vault = Path(vault)
     notes = kv.all_notes(vault)
     hashes = {rel: kv.file_hash(vault / rel) for rel in notes}
-    indexes = []
+    hashes.update({entry['path']: kv.file_hash(vault / entry['path']) for entry in conflicts})
+    table = kv.names(vault)
+    indexes, mismatches = [], []
     for layer in kv.layers(vault):
         index = kv.index_path(vault, layer)
         if index.is_file():
             rel = index.relative_to(vault).as_posix()
             hashes[rel] = kv.file_hash(index)
             indexes.append(rel)
+            mismatches += kv.description_mismatches(vault, layer, table)
     legacy_work = []
     for entry in mapping:
         root = vault / entry['source']
@@ -323,7 +326,7 @@ def build_worklist(vault, run, envs, mapping, conflicts, tasks, full, cursor):
         run=run, vault=str(vault), full=full, selection=selection, hashes=hashes, tasks=tasks,
         questions=questions, legacy=legacy_work,
         oversize=[n for n in notes if (vault / n).stat().st_size > kv.NOTE_BYTES],
-        over_cap=over_cap(vault, indexes),
+        over_cap=over_cap(vault, indexes), index_mismatch=mismatches,
         untyped=[n for n in selection if not kv.note_type(kv.read(vault, n))],
         dead_paths={n: dead for n in selection if (dead := kv.dead_paths(vault, n, Path.home()))},
         conflicts=conflicts, curated=curated(vault), double_index=double_index(vault),
