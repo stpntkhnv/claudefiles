@@ -111,6 +111,19 @@ class Autofix(ReviewBase):
         self.assertEqual(records, [])
         self.assertEqual(len(skipped), 1)
 
+    def test_duplicate_op_skipped_when_twin_changes_during_run(self):
+        twin = self.write('contexts/stellium/projects/orbi/same.md', 'same\n')
+        copy = self.write('projects/-x/memory/same.md', 'same\n')
+        ops = kr.duplicate_ops(self.vault, [('projects/-x/memory', 'contexts/stellium/projects/orbi')])
+        twin.write_text('changed\n')
+        history = kh.History(self.state, self.vault).init()
+        history.snapshot('base')
+        journal = ka.Journal(self.state / 'runs/r/journal.json', 'r')
+        records, skipped = ka.run_ops(history, self.vault, journal, ops)
+        self.assertTrue(copy.exists())
+        self.assertEqual(records, [])
+        self.assertEqual(len(skipped), 1)
+
     def test_report_retention(self):
         for day in range(1, 16):
             self.write(f'reviews/202611{day:02d}-000000.md', '---\nacknowledged: true\n---\nnothing\n')
