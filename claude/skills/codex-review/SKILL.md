@@ -1,19 +1,23 @@
 ---
 name: codex-review
-description: Use at superpowers checkpoints — after writing a spec (docs/superpowers/specs/) or plan (docs/superpowers/plans/), and at requesting-code-review — to get an independent single-shot Codex (GPT-5.5, high reasoning) review of the artifact, then triage its findings before presenting to the user.
+description: Use at superpowers checkpoints — after writing a spec (docs/superpowers/specs/) or plan (docs/superpowers/plans/), and at requesting-code-review — to get an independent single-shot Codex (gpt-6-astra by default, model and effort chosen per task) review of the artifact, then triage its findings before presenting to the user.
 ---
 
 # Codex Cross-Review
 
-An independent second reviewer (Codex, GPT-5.5, high reasoning) that complements
+An independent second reviewer (Codex, gpt-6-astra by default) that complements
 superpowers' own self-review. **Advisory and single-shot:** Codex informs, it does
 not gate. You triage its findings — you may reject wrong ones with technical reasoning.
 
 ## Constants
 
-- Model: `gpt-5.5` — reasoning effort: `high` (passed inline every call; `xhigh` is an
-  available upgrade if you want Codex to think longer).
-- Timeout: `900` seconds (high reasoning is slow; do not set this low).
+- Model: `gpt-6-astra`, reasoning effort `high` by default (passed inline every call). Pick another
+  model or effort when it fits the task better: `max` for a deep review of a large or risky change,
+  a cheaper model such as `gpt-6.1-terra` for a light pass. `gpt-5.5` no longer works on a ChatGPT
+  account. `codex debug models` can hide working slugs: if a slug seems missing, probe it with a
+  one-line prompt before falling back.
+- Timeout: `3600` seconds (astra at high or max takes 15-30 minutes; raise the timeout rather than
+  lowering the effort). Close stdin (`< /dev/null`) on `codex exec` calls that do not pipe input.
 
 ## When to Use
 
@@ -44,14 +48,15 @@ Run Codex in the repo, read-only, so it can pull surrounding context (sibling sp
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 ART="docs/superpowers/specs/2026-01-01-example-design.md"   # the artifact you just wrote
 OUT="$(mktemp)"
-timeout 900 codex exec \
+timeout 3600 codex exec \
   --cd "$REPO_ROOT" \
   --sandbox read-only \
   --skip-git-repo-check \
   --ephemeral \
-  -c model="gpt-5.5" \
+  -c model="gpt-6-astra" \
   -c model_reasoning_effort="high" \
   -o "$OUT" \
+  < /dev/null \
   "You are a rigorous independent design/plan reviewer. Read the artifact at $ART and the
 surrounding repository for context. Critique it for: unstated assumptions, missing edge
 cases, scope creep, internal contradictions, testability, and simpler alternatives. This is
@@ -69,9 +74,9 @@ but not `-m`, so pin the model via `-c model=`.
 
 ```bash
 BASE_SHA="$(git rev-parse HEAD~1)"   # or origin/main — same base the superpowers reviewer uses
-timeout 900 codex review \
+timeout 3600 codex review \
   --base "$BASE_SHA" \
-  -c model="gpt-5.5" \
+  -c model="gpt-6-astra" \
   -c model_reasoning_effort="high" \
   "Focus on correctness, security, and whether the change matches its stated intent."
 ```
@@ -83,9 +88,9 @@ block — do NOT also pass `-` (that would make stdin the whole prompt and drop 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 BASE_SHA="$(git rev-parse HEAD~1)"
-git diff "$BASE_SHA"...HEAD | timeout 900 codex exec \
+git diff "$BASE_SHA"...HEAD | timeout 3600 codex exec \
   --cd "$REPO_ROOT" --sandbox read-only --skip-git-repo-check --ephemeral \
-  -c model="gpt-5.5" -c model_reasoning_effort="high" \
+  -c model="gpt-6-astra" -c model_reasoning_effort="high" \
   "Review the diff in the <stdin> block for correctness, security, and intent. End with VERDICT: SOLID | REVISE."
 ```
 
