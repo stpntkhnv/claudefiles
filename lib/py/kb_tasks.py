@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-import subprocess
 import time
 from urllib.parse import unquote
 
@@ -34,13 +33,8 @@ def parse_link(link):
     return None
 
 
-def git(path, *args):
-    result = subprocess.run(['git', '-C', str(path), *args], capture_output=True, text=True)
-    return result.stdout.strip() if result.returncode == 0 else ''
-
-
 def identity(path):
-    url = git(path, 'config', '--get', 'remote.origin.url')
+    url = rm.git_value(path, 'config', '--get', 'remote.origin.url')
     try:
         return rm.canonical_remote(url) if url else None
     except ValueError:
@@ -48,17 +42,17 @@ def identity(path):
 
 
 def default_ref(path):
-    head = git(path, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
+    head = rm.git_value(path, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD')
     if head:
         return head
     for ref in DEFAULT_REFS:
-        if git(path, 'rev-parse', '-q', '--verify', 'refs/remotes/' + ref):
+        if rm.git_value(path, 'rev-parse', '-q', '--verify', 'refs/remotes/' + ref):
             return ref
     return None
 
 
 def fetched(path):
-    common = git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    common = rm.git_value(path, 'rev-parse', '--path-format=absolute', '--git-common-dir')
     stamp = Path(common) / 'FETCH_HEAD' if common else None
     if stamp and stamp.is_file():
         return datetime.fromtimestamp(stamp.stat().st_mtime, timezone.utc).date().isoformat()
@@ -66,7 +60,7 @@ def fetched(path):
 
 
 def merge_commit(path, ref, kind, number):
-    for line in git(path, 'log', '--format=%H%x09%s', ref).splitlines():
+    for line in rm.git_value(path, 'log', '--format=%H%x09%s', ref).splitlines():
         sha, _, subject = line.partition('\t')
         if kind == 'ado' and subject.startswith(f'Merged PR {number}:'):
             return sha
@@ -118,8 +112,8 @@ def status(vault, rel, now=None):
             continue
         result.update(checkout=path, fetched=fetched(path))
         if kind == 'branch':
-            if 'origin/' + value in git(path, 'branch', '-r', '--merged', ref).split():
-                result.update(status='branch-merged', sha=git(path, 'rev-parse', ref))
+            if 'origin/' + value in rm.git_value(path, 'branch', '-r', '--merged', ref).split():
+                result.update(status='branch-merged', sha=rm.git_value(path, 'rev-parse', ref))
                 return result
             continue
         sha = merge_commit(path, ref, kind, value)
