@@ -60,6 +60,7 @@ config_ensure_all() {   # ask ONCE for every flag/secret that gates a feature
     if ! _kb_in_container; then
       config_ensure kb.machine "Machine name for the machine memory layer ('none' = no machine layer):"
       kb_machine_name >/dev/null
+      config_ensure_bool kb.reviewer "Run the weekly knowledge-base review on this machine (one machine per vault)? (y/N)"
     fi
   fi
 }
@@ -98,6 +99,9 @@ failed=("${PROVISION_FAILED[@]}")
 
 log "kb workspace"
 kb_workspace_unwire
+
+log "kb review"
+kb_reviewer_apply "$( [ "$(config_flag kb)" = true ] && [ "$(config_get kb.reviewer)" = true ] && echo true || echo false )"
 
 log "verify"
 for p in "${selected[@]}"; do

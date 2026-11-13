@@ -310,4 +310,35 @@ chk "container keeps machine link"  [ -L "$MCH_LINK" ]
 config_set kb.vault_path "relative/kb"
 chk "invalid vault only warns"      kb_workspace_unwire
 
+# --- kb_reviewer_apply ------------------------------------------------------
+setup_fixture_home >/dev/null; hu="$HOME"
+export CLAUDEFILES_CONFIG_DIR="$hu/.config/claudefiles"; mkdir -p "$CLAUDEFILES_CONFIG_DIR"
+config_set kb.vault_path "$hu/kb"
+U="$hu/.config/systemd/user"; SL="$hu/.systemctl.log"
+kb_reviewer_apply true
+chk "four units written" bash -c 'for u in claudefiles-kb-snapshot.service claudefiles-kb-snapshot.timer claudefiles-kb-review.service claudefiles-kb-review.timer; do grep -qF "Description=claudefiles knowledge-base" "$1/$u" || exit 1; done' _ "$U"
+chk "snapshot timer enabled" grep -qx -- "--user enable --now claudefiles-kb-snapshot.timer" "$SL"
+chk "review timer waits for the first run" bash -c '! grep -q "enable --now claudefiles-kb-review.timer" "$1"' _ "$SL"
+chk "review service runs the review" grep -qx "ExecStart=%h/.local/bin/claudefiles-kb review" "$U/claudefiles-kb-review.service"
+chk "review timer is weekly" grep -qx "OnCalendar=Mon \*-\*-\* 09:00" "$U/claudefiles-kb-review.timer"
+cp "$U/claudefiles-kb-review.timer" "$hu/timer.run1"
+mkdir -p "$hu/.local/state/claudefiles/kb"; : > "$hu/.local/state/claudefiles/kb/initialized"
+kb_reviewer_apply true
+chk "units idempotent" cmp -s "$hu/timer.run1" "$U/claudefiles-kb-review.timer"
+chk "review timer enabled after the first run" grep -qx -- "--user enable --now claudefiles-kb-review.timer" "$SL"
+SYSTEMCTL_ACTIVE_RC=0 kb_reviewer_apply false 2>/dev/null
+chk "units kept while a review runs" [ -f "$U/claudefiles-kb-review.service" ]
+kb_reviewer_apply false
+chk "units removed when not reviewer" bash -c '! ls "$1"/claudefiles-kb-* >/dev/null 2>&1' _ "$U"
+chk "timers disabled" grep -qx -- "--user disable --now claudefiles-kb-review.timer" "$SL"
+printf '[Unit]\nDescription=mine\n' > "$U/claudefiles-kb-review.timer"
+kb_reviewer_apply true
+chk "foreign unit untouched" grep -qx "Description=mine" "$U/claudefiles-kb-review.timer"
+kb_reviewer_apply false
+chk "foreign unit survives disable" grep -qx "Description=mine" "$U/claudefiles-kb-review.timer"
+rm -f "$U/claudefiles-kb-review.timer"
+_reviewer_in_container() { CLAUDEFILES_CONTAINER=1 kb_reviewer_apply true; }
+_reviewer_in_container
+chk "no units in a container" bash -c '! ls "$1"/claudefiles-kb-* >/dev/null 2>&1' _ "$U"
+
 [ "$fails" -eq 0 ] && echo "PASS test-kb" || { echo "SOME test-kb CASES FAILED"; exit 1; }

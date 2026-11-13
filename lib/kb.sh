@@ -281,3 +281,72 @@ kb_apply() { # kb_apply <profile> <enabled:true|false>
   fi
   return 0
 }
+
+_KB_UNIT_TAG="Description=claudefiles knowledge-base"
+_KB_UNITS="claudefiles-kb-snapshot.service claudefiles-kb-snapshot.timer claudefiles-kb-review.service claudefiles-kb-review.timer"
+_kb_unit_dir() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"; }
+_kb_state_dir() { echo "${CLAUDEFILES_KB_STATE:-$HOME/.local/state/claudefiles/kb}"; }
+_kb_systemd_ok() { command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; }
+
+_kb_unit_text() { # <unit>
+  case "$1" in
+    claudefiles-kb-snapshot.service)
+      printf '[Unit]\n%s snapshot\n\n[Service]\nType=oneshot\nExecStart=%%h/.local/bin/claudefiles-kb snapshot\n' "$_KB_UNIT_TAG" ;;
+    claudefiles-kb-snapshot.timer)
+      printf '[Unit]\n%s snapshot timer\n\n[Timer]\nOnCalendar=hourly\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' "$_KB_UNIT_TAG" ;;
+    claudefiles-kb-review.service)
+      printf '[Unit]\n%s review\n\n[Service]\nType=oneshot\nTimeoutStartSec=90min\nExecStart=%%h/.local/bin/claudefiles-kb review\n' "$_KB_UNIT_TAG" ;;
+    claudefiles-kb-review.timer)
+      printf '[Unit]\n%s review timer\n\n[Timer]\nOnCalendar=Mon *-*-* 09:00\nPersistent=true\nRandomizedDelaySec=15min\n\n[Install]\nWantedBy=timers.target\n' "$_KB_UNIT_TAG" ;;
+  esac
+}
+
+_kb_units_remove() {
+  local dir unit changed=false
+  dir="$(_kb_unit_dir)"
+  if _kb_systemd_ok && systemctl --user is-active --quiet claudefiles-kb-review.service 2>/dev/null; then
+    warn "kb: a knowledge-base review is running — units left in place; re-run setup.sh after it finishes"
+    return 0
+  fi
+  for unit in $_KB_UNITS; do
+    [ -f "$dir/$unit" ] && grep -qF "$_KB_UNIT_TAG" "$dir/$unit" || continue
+    case "$unit" in
+      *.timer) _kb_systemd_ok && { systemctl --user disable --now "$unit" >/dev/null 2>&1 || true; } ;;
+    esac
+    rm -f "$dir/$unit"; changed=true
+  done
+  if [ "$changed" = true ] && _kb_systemd_ok; then systemctl --user daemon-reload >/dev/null 2>&1 || true; fi
+  return 0
+}
+
+kb_reviewer_apply() { # <enabled:true|false>
+  local enabled="${1:-false}" dir unit changed=false
+  if [ "$enabled" != true ] || _kb_in_container; then
+    _kb_units_remove; return 0
+  fi
+  dir="$(_kb_unit_dir)"
+  mkdir -p "$dir" || { warn "kb: cannot create $dir"; return 0; }
+  for unit in $_KB_UNITS; do
+    if [ -e "$dir/$unit" ] && ! grep -qF "$_KB_UNIT_TAG" "$dir/$unit"; then
+      warn "kb: $dir/$unit is not claudefiles-managed — leaving it untouched"; continue
+    fi
+    if ! cmp -s <(_kb_unit_text "$unit") "$dir/$unit"; then
+      _kb_unit_text "$unit" > "$dir/$unit"; changed=true
+    fi
+  done
+  if ! _kb_systemd_ok; then
+    warn "kb: no user systemd here — knowledge-base timers are not active"; return 0
+  fi
+  if [ "$changed" = true ]; then systemctl --user daemon-reload >/dev/null 2>&1 || true; fi
+  systemctl --user enable --now claudefiles-kb-snapshot.timer >/dev/null 2>&1 \
+    || warn "kb: cannot enable claudefiles-kb-snapshot.timer"
+  if [ -e "$(_kb_state_dir)/initialized" ]; then
+    systemctl --user enable --now claudefiles-kb-review.timer >/dev/null 2>&1 \
+      || warn "kb: cannot enable claudefiles-kb-review.timer"
+  fi
+  if command -v loginctl >/dev/null 2>&1 && \
+     [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" = no ]; then
+    warn "kb: Linger=no — knowledge-base timers run only while you are logged in (loginctl enable-linger)"
+  fi
+  return 0
+}

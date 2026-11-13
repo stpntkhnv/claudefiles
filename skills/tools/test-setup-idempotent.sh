@@ -42,7 +42,7 @@ mkdir -p "$h/.config/claudefiles"
 mkdir -p "$h/main" "$h/system"
 cat > "$h/.config/claudefiles/secrets.json" <<'EOF'
 { "flags": {"profile_super":true,"profile_gstack":true,"context7":true,"playwright":true,"azure_mcp":false,"ado":false,"dotnet_skills":true,"codex_review":true,"codex_plugin":false,"linear":false,"kb":true},
-  "kb": {"vault_path": "SET-BELOW", "context": "work", "machine": "box"},
+  "kb": {"vault_path": "SET-BELOW", "context": "work", "machine": "box", "reviewer": true},
   "context7_api_key":"", "ado":{"email":"","orgs":[],"pat":{}} }
 EOF
 # The vault has to live inside the fixture HOME, and a quoted heredoc expands nothing.
@@ -60,6 +60,7 @@ cp "$h/.claude-super/settings.json" "$h/first-super.json"
 cp "$h/.claude/CLAUDE.md" "$h/first-claudemd.md"
 cp "$h/.bashrc" "$h/first-bashrc"
 cp "$h/.profile" "$h/first-profile"
+cp -a "$h/.config/systemd/user" "$h/first-units"
 # No dotfiles installation or registry is present. setup.sh itself must activate plain Claude.
 shim="$(bash --noprofile --norc -c '. "$HOME/.profile"; type -P claude')"
 [ "$shim" = "$h/.local/share/claudefiles-runtime/bin/claude" ] \
@@ -89,6 +90,9 @@ diff "$h/first-super.json" "$h/.claude-super/settings.json" || { echo "FAIL supe
 diff "$h/first-claudemd.md" "$h/.claude/CLAUDE.md" || { echo "FAIL CLAUDE.md not idempotent"; exit 1; }
 diff "$h/first-super-claudemd.md" "$h/.claude-super/CLAUDE.md" || { echo "FAIL super CLAUDE.md not idempotent"; exit 1; }
 diff "$h/first-manifest.json" "$manifest"       || { echo "FAIL manifest not idempotent"; exit 1; }
+diff -r "$h/first-units" "$h/.config/systemd/user" || { echo "FAIL review units not idempotent"; exit 1; }
+grep -q 'enable --now claudefiles-kb-snapshot.timer' "$h/.systemctl.log" || { echo "FAIL snapshot timer not enabled"; exit 1; }
+grep -q 'enable --now claudefiles-kb-review.timer' "$h/.systemctl.log" && { echo "FAIL review timer enabled before the first run"; exit 1; }
 [ -d "$h/kb/projects" ] || { echo "FAIL kb vault not created"; exit 1; }
 [ -f "$h/kb/global/INDEX.md" ] || { echo "FAIL kb global index not created"; exit 1; }
 [ ! -L "$h/main/.claude/rules/context-index.md" ] || { echo "FAIL context umbrella link kept"; exit 1; }
@@ -150,9 +154,9 @@ mkdir -p "$h/.claude/projects/keepme"
 : > "$CLAUDE_FAKE_LOG"; : > "$PACLOG"
 # answers: confirm word, super y, dotnet y, codex_review y, codex_plugin n, playwright y,
 # azure n, ado n, gstack y, context7 y, context7 key (empty), linear n, kb y, vault path,
-# kb.context, kb.machine. The order MUST track config_ensure_all. Trailing blanks absorb any
+# kb.context, kb.machine, kb.reviewer. The order MUST track config_ensure_all. Trailing blanks absorb any
 # dep prompt that a non-provisioned box might raise AFTER the config phase.
-printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\ny\n%s\nwork\nbox\n\n\n\n' "$h/kb" | \
+printf 'clean\ny\ny\ny\nn\ny\nn\nn\ny\ny\n\nn\ny\n%s\nwork\nbox\ny\n\n\n\n' "$h/kb" | \
   CLAUDEFILES_ASSUME_TTY=1 CLAUDEFILES_CLEAN=1 CLAUDEFILES_CLEAN_SKIP_NET=1 bash "$cf/setup.sh"
 
 [ -e "$h/.claude/skills/ges-esp" ] && { echo "FAIL clean kept a stray skill"; exit 1; }

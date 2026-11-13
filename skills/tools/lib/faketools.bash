@@ -61,6 +61,9 @@ esac
 exit 0
 EOF
   chmod +x "$bin/claude"
+  printf '#!/usr/bin/env bash\necho "$*" >> "$HOME/.systemctl.log"\ncase "$*" in *is-active*) exit "${SYSTEMCTL_ACTIVE_RC:-3}" ;; esac\nexit 0\n' > "$bin/systemctl"
+  printf '#!/usr/bin/env bash\necho yes\n' > "$bin/loginctl"
+  chmod +x "$bin/systemctl" "$bin/loginctl"
   export PATH="$bin:$PATH"
   hash -r 2>/dev/null || true   # drop any cached real-claude path so the fake wins
   echo "$h"

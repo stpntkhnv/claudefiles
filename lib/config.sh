@@ -54,3 +54,15 @@ config_ensure_flag() { # <name> <prompt> — ask ONCE for a boolean, persist as 
     die "missing required flag 'flags.$name' and no TTY to prompt (set it in $(config_path))"
   fi
 }
+
+config_ensure_bool() { # <key> <prompt>
+  local key="$1" prompt="$2"
+  config_has "$key" && return 0
+  if _has_tty; then
+    local val; read -r -p "$prompt " val || true
+    case "${val,,}" in y|yes|true|1) val=true ;; *) val=false ;; esac
+    config_set_bool "$key" "$val"
+  else
+    die "missing required config '$key' and no TTY to prompt (set it in $(config_path))"
+  fi
+}

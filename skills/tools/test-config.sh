@@ -42,4 +42,11 @@ config_set_array ado.orgs "a, b ,c,"
 # not a subshell), so we'd never reach the PASS line even on correct behavior.
 if (CLAUDEFILES_ASSUME_TTY=0 config_ensure ado.pat.a "pat?") 2>/dev/null; then
   echo "FAIL should have errored without TTY"; exit 1; fi
+
+printf 'y\n' | CLAUDEFILES_ASSUME_TTY=1 config_ensure_bool kb.reviewer "reviewer?" 2>/dev/null
+[ "$(config_get kb.reviewer)" = true ] || { echo "FAIL ensure_bool stores true"; exit 1; }
+CLAUDEFILES_ASSUME_TTY=0 config_ensure_bool kb.reviewer "reviewer?"
+[ "$(config_get kb.reviewer)" = true ] || { echo "FAIL ensure_bool re-asked"; exit 1; }
+if (CLAUDEFILES_ASSUME_TTY=0 config_ensure_bool kb.other "x?") 2>/dev/null; then
+  echo "FAIL ensure_bool should die without TTY"; exit 1; fi
 echo "PASS test-config"
